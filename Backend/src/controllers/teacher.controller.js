@@ -1,0 +1,280 @@
+import Batch from "../models/Batch.js";
+import Student from "../models/Student.js";
+import Attendance from "../models/Attendance.js";
+import mongoose from "mongoose";
+
+// Valid attendance statuses
+const VALID_STATUSES = ["Present", "Absent", "Late", "Excused"];
+
+// Create a new batch
+export const createBatch = async (req, res) => {
+  try {
+    const { name } = req.body;
+    const teacherId = req.user.userId;
+    const city = req.user.city;
+
+    if (!teacherId) {
+      return res.status(400).json({ message: "Invalid token: teacherId missing" });
+    }
+
+    if (!name || name.trim() === "") {
+      return res.status(400).json({ message: "Batch name is required" });
+    }
+
+    const batch = await Batch.create({ name, teacher: teacherId, city });
+    res.status(201).json(batch);
+  } catch (err) {
+    res.status(500).json({ message: "Failed to create batch", error: err.message });
+  }
+};
+
+// List teacher's batches
+export const listBatches = async (req, res) => {
+  try {
+    const teacherId = req.user.userId;
+    const batches = await Batch.find({ teacher: teacherId });
+
+    if (batches.length === 0) {
+      return res.status(404).json({ message: "No batches found for this teacher" });
+    }
+
+    res.json(batches);
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch batches", error: err.message });
+  }
+};
+
+// Add students to a batch
+export const addStudents = async (req, res) => {
+  try {
+    const { id: batchId } = req.params;
+    const { students } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(batchId)) {
+      return res.status(400).json({ message: "Invalid batch ID" });
+    }
+
+    if (!students || !Array.isArray(students) || students.length === 0) {
+      return res.status(400).json({ message: "No students provided to add" });
+    }
+
+    const studentDocs = students.map(s => ({
+      ...s,
+      batch: new mongoose.Types.ObjectId(batchId)
+    }));
+
+    const added = await Student.insertMany(studentDocs);
+    res.status(201).json(added);
+  } catch (err) {
+    res.status(500).json({ message: "Failed to add students", error: err.message });
+  }
+};
+
+// List students in a batch
+export const listStudents = async (req, res) => {
+  try {
+    const { id: batchId } = req.params;
+    const students = await Student.find({ batch: batchId });
+
+    res.json(students);
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch students", error: err.message });
+  }
+};
+
+// Delete a batch
+export const deleteBatch = async (req, res) => {
+  try {
+    const { id: batchId } = req.params;
+
+    // Validate batchId
+    if (!mongoose.Types.ObjectId.isValid(batchId)) {
+      return res.status(400).json({ message: "Invalid batch ID" });
+    }
+
+    // Check if batch exists
+    const batch = await Batch.findById(batchId);
+    if (!batch) {
+      return res.status(404).json({ message: "Batch not found" });
+    }
+
+    // Delete all students in this batch
+    await Student.deleteMany({ batch: batchId });
+
+    // Delete all attendance records linked to this batch
+    await Attendance.deleteMany({ batch: batchId });
+
+    // Delete the batch itself
+    await Batch.findByIdAndDelete(batchId);
+
+    res.json({ message: "Batch and related data deleted successfully ✅" });
+  } catch (err) {
+    console.error("Delete batch error:", err);
+    res.status(500).json({ message: "Failed to delete batch", error: err.message });
+  }
+};
+
+// Mark attendance
+// const VALID_STATUSES = ["Present", "Absent", "Late", "Excused"];
+
+// Mark attendance (respects selected date from client)
+export const markAttendance = async (req, res) => {
+  try {
+    const { batchId, records, date } = req.body;
+
+    // 1) Validate request
+    if (!batchId || !records || !Array.isArray(records) || records.length === 0) {
+      return res.status(400).json({ message: "batchId and records are required" });
+    }
+    if (!mongoose.Types.ObjectId.isValid(batchId)) {
+      return res.status(400).json({ message: "Invalid batch ID" });
+    }
+
+    // 2) Normalize the target attendance date (default to today)
+    const attendanceDate = date ? new Date(date) : new Date();
+    attendanceDate.setHours(0, 0, 0, 0); // store as midnight local for day-level uniqueness
+
+    // 3) Upsert each student's attendance for that date
+    const savedRecords = await Promise.all(
+      records.map(async (r) => {
+        if (!r.studentId || !mongoose.Types.ObjectId.isValid(r.studentId)) {
+          throw new Error(`Invalid studentId: ${r.studentId}`);
+        }
+        if (!r.status) {
+          throw new Error(`Status is required for student ${r.studentId}`);
+        }
+
+        const normalizedStatus =
+          r.status.charAt(0).toUpperCase() + r.status.slice(1).toLowerCase();
+        if (!VALID_STATUSES.includes(normalizedStatus)) {
+          throw new Error(
+            `Invalid status '${r.status}' for student ${r.studentId}. Valid: ${VALID_STATUSES.join(", ")}`
+          );
+        }
+
+        // Upsert by (student, batch, date)
+        const doc = await Attendance.findOneAndUpdate(
+          { student: r.studentId, batch: batchId, date: attendanceDate },
+          {
+            $set: {
+              status: normalizedStatus,
+              remarks: r.remarks || "",
+            },
+          },
+          { new: true, upsert: true, setDefaultsOnInsert: true }
+        ).lean();
+
+        return doc;
+      })
+    );
+
+    return res.status(201).json(savedRecords);
+  } catch (err) {
+    console.error("Mark attendance error:", err);
+    return res
+      .status(500)
+      .json({ message: "Failed to mark attendance", error: err.message });
+  }
+};
+
+
+
+
+
+// Update a student’s name
+export const updateStudent = async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const { name } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(studentId)) {
+      return res.status(400).json({ message: "Invalid student ID" });
+    }
+
+    if (!name || name.trim() === "") {
+      return res.status(400).json({ message: "Student name is required" });
+    }
+
+    const student = await Student.findById(studentId);
+    if (!student) {
+      return res.status(404).json({ message: "Student not found" });
+    }
+
+    student.name = name;
+    await student.save();
+
+    res.json({ message: "Student updated successfully ✅", student });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to update student", error: err.message });
+  }
+};
+
+// Delete a student
+export const deleteStudent = async (req, res) => {
+  try {
+    const { studentId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(studentId)) {
+      return res.status(400).json({ message: "Invalid student ID" });
+    }
+
+    const student = await Student.findById(studentId);
+    if (!student) {
+      return res.status(404).json({ message: "Student not found" });
+    }
+
+    await Student.findByIdAndDelete(studentId);
+    res.json({ message: "Student deleted successfully ✅" });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to delete student", error: err.message });
+  }
+};
+
+
+// Get today's attendance for a batch
+export const getTodayAttendance = async (req, res) => {
+  try {
+    const { batchId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(batchId)) {
+      return res.status(400).json({ message: "Invalid batch ID" });
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); // normalize to midnight
+
+    // Fetch attendance for today
+    const records = await Attendance.find({ batch: batchId, date: today }).populate("student");
+
+    res.json(records); // send an array of attendance records
+  } catch (err) {
+    console.error("Get today attendance error:", err);
+    res.status(500).json({ message: "Failed to fetch today's attendance", error: err.message });
+  }
+};
+
+// Get attendance history for a batch
+export const getAttendanceHistory = async (req, res) => {
+  try {
+    const { batchId } = req.params;
+
+    // Validate batchId
+    if (!mongoose.Types.ObjectId.isValid(batchId)) {
+      return res.status(400).json({ message: "Invalid batch ID" });
+    }
+
+    // Fetch all attendance records for this batch
+    const records = await Attendance.find({ batch: batchId })
+      .populate("student", "name")  // populate student name
+      .sort({ date: -1 });           // latest records first
+
+    if (!records || records.length === 0) {
+      return res.status(404).json({ message: "No attendance records found for this batch" });
+    }
+
+    res.json(records);
+  } catch (err) {
+    console.error("Get attendance history error:", err);
+    res.status(500).json({ message: "Failed to fetch attendance history", error: err.message });
+  }
+};
