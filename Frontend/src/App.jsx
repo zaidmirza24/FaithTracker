@@ -20,7 +20,9 @@ function App() {
     <Router>
       <Routes>
         {/* Public Routes */}
+        
         <Route path="/login" element={<Login />} />
+        <Route path="/" element={<Login />} />
 
         {/* Teacher Routes */}
         <Route
