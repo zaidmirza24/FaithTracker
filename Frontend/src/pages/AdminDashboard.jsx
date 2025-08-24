@@ -135,7 +135,7 @@ const AdminDashboard = () => {
   const handleLogout = () => {
     localStorage.removeItem("token");
     localStorage.removeItem("user");
-    window.location.href = "/login";
+    navigate('/login');
   };
 
   // Export Excel (unchanged)
