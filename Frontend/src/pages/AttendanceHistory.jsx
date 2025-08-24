@@ -1,49 +1,70 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import axios from "axios";
 import { useParams } from "react-router-dom";
 import { API_BASE } from "../config/api";
-
-// const API_BASE = "http://localhost:5000/api/teacher";
-// const REPORTS_API = "http://localhost:5000/api/reports";
 
 const AttendanceHistory = () => {
   const { batchId } = useParams();
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [year, setYear] = useState("");
+  const currentYear = new Date().getFullYear().toString();
+  const [year, setYear] = useState(currentYear);
   const [month, setMonth] = useState("");
   const token = localStorage.getItem("token");
+
+  // Build safe params (no behavior change to your fields)
+  const buildFilterParams = () => {
+    const params = {};
+    const y = (typeof year === "string" ? year.trim() : year);
+    if (y && /^\d{4}$/.test(String(y))) params.year = String(y);
+
+    if (month !== "" && !Number.isNaN(Number(month))) {
+      const m = Number(month);
+      if (m >= 1 && m <= 12) params.month = String(m); // 1..12
+    }
+    return params;
+  };
 
   const fetchHistory = async () => {
     if (!batchId) return;
     setLoading(true);
     try {
-      let url = `${API_BASE}/teacher/attendance/history/${batchId}`;
-      const params = new URLSearchParams();
-      if (year) params.append("year", year);
-      if (month) params.append("month", month);
-      const qs = params.toString();
-      if (qs) url += `?${qs}`;
-
+      const url = `${API_BASE}/teacher/attendance/history/${batchId}`;
+      const params = { ...buildFilterParams(), _: Date.now() }; // cache-buster
       const res = await axios.get(url, {
         headers: { Authorization: `Bearer ${token}` },
+        params,
       });
-
-      setRecords(res.data || []);
+      setRecords(Array.isArray(res.data) ? res.data : []);
       setError("");
     } catch (err) {
       setRecords([]);
-      setError(err.response?.data?.message || "Failed to fetch attendance history");
+      setError(err?.response?.data?.message || "Failed to fetch attendance history");
     } finally {
       setLoading(false);
     }
   };
 
+  // Initial fetch on mount / batch change
   useEffect(() => {
     fetchHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchId]);
+
+  // 🔁 Debounced auto-fetch when year/month change (so filters "work" immediately)
+  useEffect(() => {
+    if (!batchId) return;
+    const t = setTimeout(() => {
+      fetchHistory();
+    }, 300); // small debounce to avoid firing on every keystroke
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [year, month]);
+
+  const onKeyDownFilter = (e) => {
+    if (e.key === "Enter") fetchHistory();
+  };
 
   const getStatusBadge = (status = "") => {
     const s = status.toLowerCase();
@@ -57,16 +78,14 @@ const AttendanceHistory = () => {
   const exportExcel = async () => {
     if (!batchId) return;
     try {
-      let url = `${API_BASE}/reports/export?batchId=${batchId}`;
-      if (year)  url += `&year=${year}`;
-      if (month) url += `&month=${month}`;
-
+      const p = buildFilterParams();
+      const qs = new URLSearchParams({ batchId, ...p }).toString();
+      const url = `${API_BASE}/reports/export?${qs}`;
       const res = await axios.get(url, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: { toString: () => `Bearer ${token}` }.toString() || `Bearer ${token}` },
         responseType: "blob",
       });
 
-      // Figure out filename (fallback if header missing)
       const cd = res.headers["content-disposition"] || res.headers["Content-Disposition"];
       let filename = "attendance.xlsx";
       if (cd) {
@@ -76,23 +95,38 @@ const AttendanceHistory = () => {
       }
 
       const blob = new Blob([res.data], {
-        type:
-          res.headers["content-type"] ||
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type: res.headers["content-type"] || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       });
 
       const link = document.createElement("a");
-      link.href = window.URL.createObjectURL(blob);
+      link.href = URL.createObjectURL(blob);
       link.download = filename;
       document.body.appendChild(link);
       link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(link.href);
+      link.remove();
+      URL.revokeObjectURL(link.href);
     } catch (err) {
       console.error("Excel Export Error:", err);
-      alert(err.response?.data?.message || "Failed to export Excel");
+      alert(err?.response?.data?.message || "Failed to export Excel");
     }
   };
+
+  const groupedByMonth = useMemo(() => {
+    const sorted = [...records].sort((a, b) => new Date(a.date) - new Date(b.date));
+    const groups = [];
+    const map = {};
+    for (const rec of sorted) {
+      const d = new Date(rec.date);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const label = d.toLocaleString("default", { month: "long", year: "numeric" });
+      if (!map[key]) {
+        map[key] = { key, label, items: [] };
+        groups.push(map[key]);
+      }
+      map[key].items.push(rec);
+    }
+    return groups;
+  }, [records]);
 
   if (loading) {
     return (
@@ -130,6 +164,7 @@ const AttendanceHistory = () => {
                 placeholder="2025"
                 value={year}
                 onChange={(e) => setYear(e.target.value)}
+                onKeyDown={onKeyDownFilter}
                 className="px-4 py-3 bg-white/80 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none w-40"
               />
             </div>
@@ -144,6 +179,7 @@ const AttendanceHistory = () => {
               <select
                 value={month}
                 onChange={(e) => setMonth(e.target.value)}
+                onKeyDown={onKeyDownFilter}
                 className="px-4 py-3 bg-white/80 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-purple-100 outline-none w-44"
               >
                 <option value="">All Months</option>
@@ -158,9 +194,10 @@ const AttendanceHistory = () => {
             <div className="flex items-end gap-3">
               <button
                 onClick={fetchHistory}
-                className="px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200"
+                disabled={loading}
+                className="px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                Filter
+                {loading ? "Loading..." : "Filter"}
               </button>
 
               {batchId && records.length > 0 && (
@@ -227,32 +264,52 @@ const AttendanceHistory = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {records.map((rec) => (
-                    <tr key={rec._id} className="hover:bg-white/60 transition-colors duration-150">
-                      <td className="px-6 py-4 text-sm text-gray-800">
-                        {new Date(rec.date).toLocaleDateString("en-US", {
-                          weekday: "short",
-                          year: "numeric",
-                          month: "short",
-                          day: "numeric",
-                        })}
-                      </td>
-                      <td className="px-6 py-4 text-sm font-medium text-gray-900">
-                        {rec.student?.name || "—"}
-                      </td>
-                      <td className="px-6 py-4 text-sm">
-                        <span
-                          className={`inline-flex px-3 py-1 text-xs font-semibold rounded-full border ${getStatusBadge(
-                            rec.status
-                          )}`}
+                  {groupedByMonth.map((group) => (
+                    <React.Fragment key={group.key}>
+                      {/* Month separator row */}
+                      <tr>
+                        <td
+                          colSpan={4}
+                          className="px-6 py-3 bg-slate-100/80 text-slate-800 font-semibold border-y border-slate-200"
                         >
-                          {rec.status}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-sm text-gray-600">
-                        {rec.remarks || "—"}
-                      </td>
-                    </tr>
+                          <div className="flex items-center justify-between">
+                            <span>{group.label}</span>
+                            <span className="text-xs text-slate-500">
+                              {group.items.length} record{group.items.length !== 1 ? "s" : ""}
+                            </span>
+                          </div>
+                        </td>
+                      </tr>
+
+                      {/* Rows for this month */}
+                      {group.items.map((rec) => (
+                        <tr key={rec._id} className="hover:bg-white/60 transition-colors duration-150">
+                          <td className="px-6 py-4 text-sm text-gray-800">
+                            {new Date(rec.date).toLocaleDateString("en-US", {
+                              weekday: "short",
+                              year: "numeric",
+                              month: "short",
+                              day: "numeric",
+                            })}
+                          </td>
+                          <td className="px-6 py-4 text-sm font-medium text-gray-900">
+                            {rec.student?.name || "—"}
+                          </td>
+                          <td className="px-6 py-4 text-sm">
+                            <span
+                              className={`inline-flex px-3 py-1 text-xs font-semibold rounded-full border ${getStatusBadge(
+                                rec.status
+                              )}`}
+                            >
+                              {rec.status}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-600">
+                            {rec.remarks || "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>

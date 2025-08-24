@@ -21,6 +21,7 @@ const CreateTeacherForm = () => {
       });
       alert("✅ Teacher created successfully");
       setForm({ name: "", email: "", password: "", city: "" });
+      navigate("/admin/dashboard")
     } catch (err) {
       setError(err.response?.data?.message || "Failed to create teacher");
     } finally {
@@ -87,7 +88,7 @@ const CreateTeacherForm = () => {
           </div>
 
           <button
-          onClick={()=>{navigate("/admin/dashboard")}}
+          // onClick={()=>{navigate("/admin/dashboard")}}
             type="submit"
             disabled={loading}
             className={`w-full px-6 py-3 rounded-xl font-semibold text-white transition-all duration-200 transform ${

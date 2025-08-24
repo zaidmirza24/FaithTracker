@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import {API_BASE} from "../config/api.js"
+import React, { useEffect, useState, useMemo } from "react";
+import { API_BASE } from "../config/api.js";
 import axios from "axios";
 import {
   BarChart,
@@ -23,16 +23,14 @@ const AdminDashboard = () => {
   const [selectedBatch, setSelectedBatch] = useState("");
   const [attendance, setAttendance] = useState([]);
   const [summaryData, setSummaryData] = useState([]);
-  const [year, setYear] = useState("");
+  const currentYear = new Date().getFullYear().toString();
+  const [year, setYear] = useState(currentYear);
   const [month, setMonth] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   const navigate = useNavigate();
-
   const token = localStorage.getItem("token");
-  // const API_BASE = "http://localhost:5000/api/admin";
-  // const REPORTS_API = "http://localhost:5000/api/reports";
 
   // Fetch cities
   useEffect(() => {
@@ -135,7 +133,7 @@ const AdminDashboard = () => {
   const handleLogout = () => {
     localStorage.removeItem("token");
     localStorage.removeItem("user");
-    navigate('/login');
+    navigate("/login");
   };
 
   // Export Excel (unchanged)
@@ -157,7 +155,8 @@ const AdminDashboard = () => {
       let filename = "attendance.xlsx";
       if (contentDisposition) {
         let filenameMatch = contentDisposition.match(/filename="([^"]+)"/);
-        if (!filenameMatch) filenameMatch = contentDisposition.match(/filename=([^;]+)/);
+        if (!filenameMatch)
+          filenameMatch = contentDisposition.match(/filename=([^;]+)/);
         if (filenameMatch) filename = filenameMatch[1].trim();
       }
 
@@ -193,37 +192,79 @@ const AdminDashboard = () => {
     }
   };
 
+  const groupedByMonth = useMemo(() => {
+    // sort so months appear in chronological order
+    const sorted = [...attendance].sort(
+      (a, b) => new Date(a.date) - new Date(b.date)
+    );
+
+    const groups = [];
+    const map = {};
+
+    for (const rec of sorted) {
+      const d = new Date(rec.date);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const label = d.toLocaleString("default", { month: "long", year: "numeric" });
+
+      if (!map[key]) {
+        map[key] = { key, label, items: [] };
+        groups.push(map[key]);
+      }
+      map[key].items.push(rec);
+    }
+
+    return groups;
+  }, [attendance]);
+
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100">
       {/* Navbar / Header */}
       <div className="bg-white/80 backdrop-blur-sm border-b border-gray-200 sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex justify-between items-center">
-          <div>
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
+        <div
+          className="
+            max-w-7xl mx-auto 
+            px-4 sm:px-6 py-4 
+            flex flex-col sm:flex-row sm:items-center sm:justify-between
+            gap-3
+          "
+        >
+          <div className="min-w-0">
+            <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
               Admin Dashboard
             </h1>
-            <p className="text-gray-600 mt-1">Manage attendance and generate reports</p>
+            <p className="text-gray-600 mt-1 text-sm sm:text-base">
+              Manage attendance and generate reports
+            </p>
           </div>
 
-          {/* Nav actions */}
-          <div className="flex items-center gap-3">
+          {/* Nav actions — responsive & non-overflowing */}
+          <div
+            className="
+              w-full sm:w-auto
+              flex flex-wrap sm:flex-nowrap
+              justify-stretch sm:justify-end
+              items-stretch sm:items-center
+              gap-2 sm:gap-3 mt-1 sm:mt-0
+            "
+          >
             <button
               onClick={() => navigate("/admin/create-teacher")}
-              className="px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-500 text-white font-semibold rounded-xl shadow-md hover:shadow-lg hover:scale-105 transition-all duration-200"
+              className="w-full sm:w-auto px-3 sm:px-4 py-2 text-sm sm:text-base bg-gradient-to-r from-blue-500 to-indigo-500 text-white font-semibold rounded-xl shadow-md hover:shadow-lg hover:scale-[1.02] transition-all duration-200"
             >
               + Create Teacher
             </button>
 
             <button
               onClick={() => navigate("/reports")}
-              className="px-4 py-2 bg-gradient-to-r from-emerald-500 to-green-500 text-white font-semibold rounded-xl shadow-md hover:shadow-lg hover:scale-105 transition-all duration-200"
+              className="w-full sm:w-auto px-3 sm:px-4 py-2 text-sm sm:text-base bg-gradient-to-r from-emerald-500 to-green-500 text-white font-semibold rounded-xl shadow-md hover:shadow-lg hover:scale-[1.02] transition-all duration-200"
             >
               Generate Report
             </button>
 
             <button
               onClick={handleLogout}
-              className="px-4 py-2 bg-gradient-to-r from-red-500 to-pink-500 text-white font-semibold rounded-xl shadow-md hover:shadow-lg hover:scale-105 transition-all duration-200"
+              className="w-full sm:w-auto px-3 sm:px-4 py-2 text-sm sm:text-base bg-gradient-to-r from-red-500 to-pink-500 text-white font-semibold rounded-xl shadow-md hover:shadow-lg hover:scale-[1.02] transition-all duration-200"
             >
               Logout
             </button>
@@ -231,7 +272,7 @@ const AdminDashboard = () => {
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-6 py-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
         {/* Error Message */}
         {error && (
           <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl text-red-800">
@@ -243,9 +284,9 @@ const AdminDashboard = () => {
         )}
 
         {/* Selection Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6 mb-8">
           {/* City */}
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all duration-300 border border-white/50">
+          <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-5 sm:p-6 shadow-lg hover:shadow-xl transition-all duration-300 border border-white/50">
             <label className="block text-sm font-semibold text-gray-700 mb-3">
               <span className="inline-flex items-center">
                 <span className="w-3 h-3 bg-blue-500 rounded-full mr-2"></span>
@@ -268,7 +309,7 @@ const AdminDashboard = () => {
 
           {/* Teacher */}
           {teachers.length > 0 && (
-            <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all duration-300 border border-white/50">
+            <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-5 sm:p-6 shadow-lg hover:shadow-xl transition-all duration-300 border border-white/50">
               <label className="block text-sm font-semibold text-gray-700 mb-3">
                 <span className="inline-flex items-center">
                   <span className="w-3 h-3 bg-purple-500 rounded-full mr-2"></span>
@@ -292,7 +333,7 @@ const AdminDashboard = () => {
 
           {/* Batch */}
           {batches.length > 0 && (
-            <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all duration-300 border border-white/50">
+            <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-5 sm:p-6 shadow-lg hover:shadow-xl transition-all duration-300 border border-white/50">
               <label className="block text-sm font-semibold text-gray-700 mb-3">
                 <span className="inline-flex items-center">
                   <span className="w-3 h-3 bg-green-500 rounded-full mr-2"></span>
@@ -316,7 +357,7 @@ const AdminDashboard = () => {
         </div>
 
         {/* Filters & Actions */}
-        <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-white/50 mb-8">
+        <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-5 sm:p-6 shadow-lg border border-white/50 mb-8">
           <div className="flex flex-wrap gap-4 items-end">
             <div className="flex-1 min-w-32">
               <label className="block text-sm font-semibold text-gray-700 mb-2">
@@ -343,20 +384,22 @@ const AdminDashboard = () => {
                 <option value="">All Months</option>
                 {[...Array(12)].map((_, i) => (
                   <option key={i + 1} value={i + 1}>
-                    {new Date(0, i).toLocaleString("default", { month: "long" })}
+                    {new Date(0, i).toLocaleString("default", {
+                      month: "long",
+                    })}
                   </option>
                 ))}
               </select>
             </div>
 
-            <div className="flex gap-3">
+            <div className="flex gap-2 sm:gap-3 w-full sm:w-auto">
               <button
                 onClick={fetchAttendance}
                 disabled={loading}
-                className="px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+                className="w-full sm:w-auto px-5 sm:px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
               >
                 {loading ? (
-                  <div className="flex items-center">
+                  <div className="flex items-center justify-center">
                     <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full mr-2"></div>
                     Loading...
                   </div>
@@ -368,7 +411,7 @@ const AdminDashboard = () => {
               {selectedBatch && attendance.length > 0 && (
                 <button
                   onClick={exportExcel}
-                  className="px-6 py-3 bg-gradient-to-r from-emerald-500 to-green-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200"
+                  className="w-full sm:w-auto px-5 sm:px-6 py-3 bg-gradient-to-r from-emerald-500 to-green-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200"
                 >
                   📊 Export Excel
                 </button>
@@ -391,7 +434,9 @@ const AdminDashboard = () => {
               <div className="p-12 text-center">
                 <div className="inline-flex items-center">
                   <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full mr-3"></div>
-                  <span className="text-gray-600 text-lg">Loading attendance data...</span>
+                  <span className="text-gray-600 text-lg">
+                    Loading attendance data...
+                  </span>
                 </div>
               </div>
             ) : attendance.length === 0 ? (
@@ -420,37 +465,53 @@ const AdminDashboard = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {attendance.map((rec) => (
-                      <tr
-                        key={rec._id}
-                        className="hover:bg-white/50 transition-colors duration-150"
-                      >
-                        <td className="px-6 py-4 text-sm text-gray-800">
-                          {new Date(rec.date).toLocaleDateString("en-US", {
-                            weekday: "short",
-                            year: "numeric",
-                            month: "short",
-                            day: "numeric",
-                          })}
-                        </td>
-                        <td className="px-6 py-4 text-sm font-medium text-gray-900">
-                          {rec.student.name}
-                        </td>
-                        <td className="px-6 py-4 text-sm">
-                          <span
-                            className={`inline-flex px-3 py-1 text-xs font-semibold rounded-full border ${getStatusColor(
-                              rec.status
-                            )}`}
+                    {groupedByMonth.map((group) => (
+                      <React.Fragment key={group.key}>
+                        {/* Month separator row */}
+                        <tr>
+                          <td
+                            colSpan={4}
+                            className="px-6 py-3 bg-slate-100/80 text-slate-800 font-semibold border-y border-slate-200"
                           >
-                            {rec.status}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-sm text-gray-600">
-                          {rec.remarks || "-"}
-                        </td>
-                      </tr>
+                            <div className="flex items-center justify-between">
+                              <span>{group.label}</span>
+                              <span className="text-xs text-slate-500">{group.items.length} record{group.items.length !== 1 ? "s" : ""}</span>
+                            </div>
+                          </td>
+                        </tr>
+
+                        {/* Rows for this month */}
+                        {group.items.map((rec) => (
+                          <tr key={rec._id} className="hover:bg-white/50 transition-colors duration-150">
+                            <td className="px-6 py-4 text-sm text-gray-800">
+                              {new Date(rec.date).toLocaleDateString("en-US", {
+                                weekday: "short",
+                                year: "numeric",
+                                month: "short",
+                                day: "numeric",
+                              })}
+                            </td>
+                            <td className="px-6 py-4 text-sm font-medium text-gray-900">
+                              {rec.student.name}
+                            </td>
+                            <td className="px-6 py-4 text-sm">
+                              <span
+                                className={`inline-flex px-3 py-1 text-xs font-semibold rounded-full border ${getStatusColor(
+                                  rec.status
+                                )}`}
+                              >
+                                {rec.status}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 text-sm text-gray-600">
+                              {rec.remarks || "-"}
+                            </td>
+                          </tr>
+                        ))}
+                      </React.Fragment>
                     ))}
                   </tbody>
+
                 </table>
               </div>
             )}

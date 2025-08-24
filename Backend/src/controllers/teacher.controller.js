@@ -254,19 +254,58 @@ export const getTodayAttendance = async (req, res) => {
 };
 
 // Get attendance history for a batch
+// Get attendance history for a batch (IST-aware month/year filtering)
 export const getAttendanceHistory = async (req, res) => {
   try {
     const { batchId } = req.params;
+    const { year, month } = req.query; // year=YYYY, month=1..12
 
-    // Validate batchId
     if (!mongoose.Types.ObjectId.isValid(batchId)) {
       return res.status(400).json({ message: "Invalid batch ID" });
     }
 
-    // Fetch all attendance records for this batch
-    const records = await Attendance.find({ batch: batchId })
-      .populate("student", "name")  // populate student name
-      .sort({ date: -1 });           // latest records first
+    const query = { batch: batchId };
+
+    // ---- Build IST (UTC+05:30) boundaries so months match what users see ----
+    const TZ_OFFSET_MIN = 330; // Asia/Kolkata
+    const TZ_OFFSET_MS  = TZ_OFFSET_MIN * 60 * 1000;
+
+    const yNum = year && /^\d{4}$/.test(String(year)) ? Number(year) : null;
+    const mNum = month != null && month !== "" && !Number.isNaN(Number(month))
+      ? Number(month)
+      : null;
+
+    let start, end;
+
+    if (yNum && mNum && mNum >= 1 && mNum <= 12) {
+      // [YYYY-MM-01 00:00 IST, YYYY-(MM+1)-01 00:00 IST)
+      const startUTCms = Date.UTC(yNum, mNum - 1, 1, 0, 0, 0, 0);
+      const endUTCms   = Date.UTC(yNum, mNum,     1, 0, 0, 0, 0);
+      start = new Date(startUTCms - TZ_OFFSET_MS);
+      end   = new Date(endUTCms   - TZ_OFFSET_MS);
+    } else if (yNum) {
+      // Whole year in IST
+      const startUTCms = Date.UTC(yNum,     0, 1, 0, 0, 0, 0);
+      const endUTCms   = Date.UTC(yNum + 1, 0, 1, 0, 0, 0, 0);
+      start = new Date(startUTCms - TZ_OFFSET_MS);
+      end   = new Date(endUTCms   - TZ_OFFSET_MS);
+    } else if (mNum && mNum >= 1 && mNum <= 12) {
+      // Month without year => assume current year (IST)
+      const now = new Date();
+      const nowYear = now.getUTCFullYear(); // ok since we convert to IST below
+      const startUTCms = Date.UTC(nowYear, mNum - 1, 1, 0, 0, 0, 0);
+      const endUTCms   = Date.UTC(nowYear, mNum,     1, 0, 0, 0, 0);
+      start = new Date(startUTCms - TZ_OFFSET_MS);
+      end   = new Date(endUTCms   - TZ_OFFSET_MS);
+    }
+
+    if (start && end) {
+      query.date = { $gte: start, $lt: end };
+    }
+
+    const records = await Attendance.find(query)
+      .populate("student", "name")
+      .sort({ date: -1 });
 
     if (!records || records.length === 0) {
       return res.status(404).json({ message: "No attendance records found for this batch" });

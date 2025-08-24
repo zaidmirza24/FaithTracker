@@ -216,12 +216,25 @@ const TeacherAttendance = () => {
               {students.map((student) => (
                 <div
                   key={student._id}
-                  className="flex items-center gap-4 bg-white/70 backdrop-blur-sm rounded-2xl shadow-md border border-white/50 p-4 hover:shadow-xl transition-all duration-300"
+                  className="
+      bg-white/70 backdrop-blur-sm rounded-2xl shadow-md border border-white/50 p-4
+      hover:shadow-xl transition-all duration-300
+      flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4
+    "
                 >
-                  <span className="font-semibold w-40 text-gray-800">
+                  {/* Name */}
+                  <span
+                    className="
+        font-semibold text-gray-800
+        w-full sm:w-48 shrink-0
+        truncate
+      "
+                    title={student.name}
+                  >
                     {student.name}
                   </span>
 
+                  {/* Select */}
                   <select
                     value={attendance[student._id] || "Present"}
                     onChange={(e) =>
@@ -230,7 +243,12 @@ const TeacherAttendance = () => {
                         [student._id]: e.target.value,
                       })
                     }
-                    className="px-4 py-3 bg-white/80 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-100 disabled:opacity-60"
+                    className="
+        w-full sm:w-44
+        px-4 py-3 bg-white/80 border-2 border-gray-200 rounded-xl
+        focus:ring-4 focus:ring-blue-100 disabled:opacity-60
+        min-w-0
+      "
                     disabled={attendanceExists && !editMode}
                   >
                     {STATUS_OPTIONS.map((status) => (
@@ -240,6 +258,7 @@ const TeacherAttendance = () => {
                     ))}
                   </select>
 
+                  {/* Remarks */}
                   <input
                     type="text"
                     placeholder="Remarks (optional)"
@@ -247,28 +266,33 @@ const TeacherAttendance = () => {
                     onChange={(e) =>
                       setRemarks({ ...remarks, [student._id]: e.target.value })
                     }
-                    className="flex-1 px-4 py-3 bg-white/80 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-100 disabled:opacity-60"
+                    className="
+        w-full sm:flex-1
+        px-4 py-3 bg-white/80 border-2 border-gray-200 rounded-xl
+        focus:ring-4 focus:ring-blue-100 disabled:opacity-60
+        min-w-0
+      "
                     disabled={attendanceExists && !editMode}
                   />
                 </div>
               ))}
 
+
               <button
                 onClick={handleSubmit}
                 disabled={submitting || (attendanceExists && !editMode)}
-                className={`mt-6 w-full px-6 py-3 rounded-xl font-semibold text-white transition-all duration-200 transform ${
-                  submitting || (attendanceExists && !editMode)
+                className={`mt-6 w-full px-6 py-3 rounded-xl font-semibold text-white transition-all duration-200 transform ${submitting || (attendanceExists && !editMode)
                     ? "bg-gray-400 cursor-not-allowed"
                     : "bg-gradient-to-r from-emerald-500 to-green-500 shadow-lg hover:shadow-xl hover:scale-105"
-                }`}
+                  }`}
               >
                 {attendanceExists
                   ? editMode
                     ? `Update Attendance (${new Date(selectedDate).toLocaleDateString()})`
                     : "Attendance Exists"
                   : submitting
-                  ? "Submitting..."
-                  : `Submit Attendance (${new Date(selectedDate).toLocaleDateString()})`}
+                    ? "Submitting..."
+                    : `Submit Attendance (${new Date(selectedDate).toLocaleDateString()})`}
               </button>
             </div>
           )}
