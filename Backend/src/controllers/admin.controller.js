@@ -148,13 +148,13 @@ export const createTeacher = async (req, res) => {
     }
 
     // Hash password
-    const salt = await bcrypt.genSalt(10);
-    const passwordHash = await bcrypt.hash(password, salt);
+    // const salt = await bcrypt.genSalt(10);
+    // const passwordHash = await bcrypt.hash(password, salt);
 
     const teacher = await Teacher.create({
       name,
       email,
-      passwordHash,
+      password,
       city,
     });
 
