@@ -44,7 +44,7 @@ const AdminDashboard = () => {
         const res = await axios.get(`${API_BASE}/admin/cities`, {
           headers: { Authorization: `Bearer ${token}` },
         });
-        setCities(res.data || []);
+        setCities((res.data || []).filter(Boolean));
       } catch (err) {
         setError(err.response?.data?.message || "Failed to fetch cities");
       }
@@ -64,7 +64,7 @@ const AdminDashboard = () => {
             headers: { Authorization: `Bearer ${token}` },
           }
         );
-        setTeachers(res.data || []);
+        setTeachers((res.data || []).filter(Boolean));
         setSelectedTeacher("");
         setBatches([]);
         setSelectedBatch("");
@@ -87,7 +87,7 @@ const AdminDashboard = () => {
             headers: { Authorization: `Bearer ${token}` },
           }
         );
-        setBatches(res.data || []);
+        setBatches((res.data || []).filter(Boolean));
         setSelectedBatch("");
         setAttendance([]);
       } catch (err) {
@@ -126,13 +126,13 @@ const AdminDashboard = () => {
       const res = await axios.get(listUrl, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      setAttendance(res.data || []);
+      setAttendance((res.data || []).filter(Boolean));
 
       const summaryUrl = buildQuery(`${API_BASE}/reports/summary`);
       const summaryRes = await axios.get(summaryUrl, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      setSummaryData(summaryRes.data || []);
+      setSummaryData((summaryRes.data || []).filter(Boolean));
     } catch (err) {
       setError(
         err.response?.data?.message || "Failed to fetch attendance or summary"
@@ -331,7 +331,7 @@ const AdminDashboard = () => {
                 <option value="">-- Choose Teacher --</option>
                 {teachers.map((t) => (
                   <option key={t._id} value={t._id}>
-                    {t.name}
+                    {t?.name ?? "Unknown"}
                   </option>
                 ))}
               </select>
@@ -355,7 +355,7 @@ const AdminDashboard = () => {
                 <option value="">-- Choose Batch --</option>
                 {batches.map((b) => (
                   <option key={b._id} value={b._id}>
-                    {b.name}
+                    {b?.name ?? "Unknown"}
                   </option>
                 ))}
               </select>
@@ -519,7 +519,7 @@ const AdminDashboard = () => {
                               })}
                             </td>
                             <td className="px-6 py-4 text-sm font-medium text-gray-900">
-                              {rec.student.name}
+                              {rec?.student?.name ?? rec?.studentName ?? "Deleted Student"}
                             </td>
                             <td className="px-6 py-4 text-sm">
                               <span
