@@ -116,64 +116,94 @@ export const deleteBatch = async (req, res) => {
 
 // Mark attendance
 // const VALID_STATUSES = ["Present", "Absent", "Late", "Excused"];
-
-// Mark attendance (respects selected date from client)
 export const markAttendance = async (req, res) => {
   try {
     const { batchId, records, date } = req.body;
 
-    // 1) Validate request
-    if (!batchId || !records || !Array.isArray(records) || records.length === 0) {
-      return res.status(400).json({ message: "batchId and records are required" });
+    // 1) Basic validation
+    if (!batchId || !mongoose.Types.ObjectId.isValid(batchId)) {
+      return res.status(400).json({ message: "Invalid or missing batchId" });
     }
-    if (!mongoose.Types.ObjectId.isValid(batchId)) {
-      return res.status(400).json({ message: "Invalid batch ID" });
+    if (!Array.isArray(records) || records.length === 0) {
+      return res.status(400).json({ message: "records must be a non-empty array" });
     }
 
-    // 2) Normalize the target attendance date (default to today)
+    // 2) Normalize the date (default = today)
     const attendanceDate = date ? new Date(date) : new Date();
-    attendanceDate.setHours(0, 0, 0, 0); // store as midnight local for day-level uniqueness
+    if (isNaN(attendanceDate.getTime())) {
+      return res.status(400).json({ message: "Invalid date format" });
+    }
+    attendanceDate.setHours(0, 0, 0, 0);
 
-    // 3) Upsert each student's attendance for that date
-    const savedRecords = await Promise.all(
+    // 3) Upsert each record, but collect successes/failures
+    const results = await Promise.all(
       records.map(async (r) => {
-        if (!r.studentId || !mongoose.Types.ObjectId.isValid(r.studentId)) {
-          throw new Error(`Invalid studentId: ${r.studentId}`);
-        }
-        if (!r.status) {
-          throw new Error(`Status is required for student ${r.studentId}`);
-        }
+        try {
+          if (!r?.studentId || !mongoose.Types.ObjectId.isValid(r.studentId)) {
+            throw new Error(`Invalid studentId: ${r?.studentId}`);
+          }
+          if (!r?.status) {
+            throw new Error(`Missing status for student ${r.studentId}`);
+          }
 
-        const normalizedStatus =
-          r.status.charAt(0).toUpperCase() + r.status.slice(1).toLowerCase();
-        if (!VALID_STATUSES.includes(normalizedStatus)) {
-          throw new Error(
-            `Invalid status '${r.status}' for student ${r.studentId}. Valid: ${VALID_STATUSES.join(", ")}`
-          );
-        }
+          const normalizedStatus =
+            r.status.charAt(0).toUpperCase() + r.status.slice(1).toLowerCase();
 
-        // Upsert by (student, batch, date)
-        const doc = await Attendance.findOneAndUpdate(
-          { student: r.studentId, batch: batchId, date: attendanceDate },
-          {
-            $set: {
-              status: normalizedStatus,
-              remarks: r.remarks || "",
+          if (!VALID_STATUSES.includes(normalizedStatus)) {
+            throw new Error(
+              `Invalid status '${r.status}' for student ${r.studentId}. Valid: ${VALID_STATUSES.join(", ")}`
+            );
+          }
+
+          // Explicit upsert: set fixed fields on insert, status each time
+          const updated = await Attendance.findOneAndUpdate(
+            { student: r.studentId, batch: batchId, date: attendanceDate },
+            {
+              $set: {
+                status: normalizedStatus,
+                remarks: r.remarks || "",
+              },
+              $setOnInsert: {
+                student: r.studentId,
+                batch: batchId,
+                date: attendanceDate,
+              },
             },
-          },
-          { new: true, upsert: true, setDefaultsOnInsert: true }
-        ).lean();
+            {
+              new: true,
+              upsert: true,
+              setDefaultsOnInsert: true,
+              runValidators: true,
+              context: "query",
+            }
+          ).lean();
 
-        return doc;
+          return { ok: true, record: updated };
+        } catch (e) {
+          return { ok: false, error: e.message, studentId: r?.studentId || null };
+        }
       })
     );
 
-    return res.status(201).json(savedRecords);
+    const failures = results.filter((r) => !r.ok);
+    if (failures.length) {
+      // Multi-status style response
+      return res.status(207).json({
+        message: `Some records failed`,
+        okCount: results.length - failures.length,
+        failCount: failures.length,
+        failures,
+        records: results.filter((r) => r.ok).map((r) => r.record),
+      });
+    }
+
+    return res.status(201).json(results.map((r) => r.record));
   } catch (err) {
     console.error("Mark attendance error:", err);
-    return res
-      .status(500)
-      .json({ message: "Failed to mark attendance", error: err.message });
+    return res.status(500).json({
+      message: "Failed to mark attendance",
+      error: err?.message || "Unknown error",
+    });
   }
 };
 
