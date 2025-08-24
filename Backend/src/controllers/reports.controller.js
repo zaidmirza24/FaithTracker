@@ -15,77 +15,88 @@ export const attendanceSummary = async (req, res) => {
   }
 };
 
+// import ExcelJS from "exceljs";
+// import { getFilteredAttendance } from "../services/attendance.service.js";
+
 export const exportAttendanceExcel = async (req, res) => {
   try {
-    const { batchId, period, year, month } = req.query;
+    const { year, month, period } = req.query;
 
-    // --- 0) Validate
-    if (!batchId || !mongoose.Types.ObjectId.isValid(batchId)) {
-      return res.status(400).json({ message: "Valid batchId is required" });
-    }
+    // 1) Fetch records first
+    const records = await getFilteredAttendance(req.query);
 
-    // --- 1) Build IST month boundaries (UTC+05:30)
-    const TZ_OFFSET_MS = 330 * 60 * 1000; // Asia/Kolkata
-
-    const istMonthStart = (y, m0) => new Date(Date.UTC(y, m0, 1, 0, 0, 0, 0) - TZ_OFFSET_MS);
-    const istNextMonthStart = (y, m0) => istMonthStart(y, m0 + 1);
+    // 2) Compute date range
+    const TZ_OFFSET_MIN = 330; // Asia/Kolkata
+    const TZ_OFFSET_MS = TZ_OFFSET_MIN * 60 * 1000;
 
     let start = null, end = null;
 
-    const yNum = year && /^\d{4}$/.test(String(year)) ? Number(year) : null;
-    const mNum = month != null && month !== "" && !Number.isNaN(Number(month)) ? Number(month) : null;
+    const now = new Date();
+    const yNow = now.getFullYear();
+    const mNow = now.getMonth();
 
     if (period === "3m" || period === "6m") {
       const months = period === "3m" ? 3 : 6;
-      const nowIST = new Date(Date.now() + TZ_OFFSET_MS);
-      const yNow = nowIST.getUTCFullYear();
-      const mNow = nowIST.getUTCMonth();
-      end = istNextMonthStart(yNow, mNow); // exclusive
-      let aY = yNow, aM = mNow - (months - 1);
-      while (aM < 0) { aM += 12; aY -= 1; }
-      start = istMonthStart(aY, aM);
-    } else if (yNum && mNum && mNum >= 1 && mNum <= 12) {
-      start = istMonthStart(yNum, mNum - 1);
-      end   = istNextMonthStart(yNum, mNum - 1);
-    } else if (yNum) {
-      start = istMonthStart(yNum, 0);
-      end   = istMonthStart(yNum + 1, 0);
-    } else if (mNum && mNum >= 1 && mNum <= 12) {
-      const nowIST = new Date(Date.now() + TZ_OFFSET_MS);
-      const yNow = nowIST.getUTCFullYear();
-      start = istMonthStart(yNow, mNum - 1);
-      end   = istNextMonthStart(yNow, mNum - 1);
+
+      // end = first day of next month (local IST)
+      const endUTC = Date.UTC(yNow, mNow + 1, 1, 0, 0, 0, 0);
+      end = new Date(endUTC - TZ_OFFSET_MS);
+
+      // start = first day of (currentMonth - (months - 1))
+      const anchor = new Date(Date.UTC(yNow, mNow, 1, 0, 0, 0, 0));
+      anchor.setMonth(anchor.getMonth() - (months - 1));
+      start = new Date(anchor.getTime() - TZ_OFFSET_MS);
+    } else if (year && month) {
+      const y = Number(year);
+      const m = Number(month) - 1;
+      const startUTC = Date.UTC(y, m, 1, 0, 0, 0, 0);
+      const endUTC = Date.UTC(y, m + 1, 1, 0, 0, 0, 0);
+      start = new Date(startUTC - TZ_OFFSET_MS);
+      end = new Date(endUTC - TZ_OFFSET_MS);
+    } else if (year) {
+      const y = Number(year);
+      const startUTC = Date.UTC(y, 0, 1, 0, 0, 0, 0);
+      const endUTC = Date.UTC(y + 1, 0, 1, 0, 0, 0, 0);
+      start = new Date(startUTC - TZ_OFFSET_MS);
+      end = new Date(endUTC - TZ_OFFSET_MS);
+    } else if (month) {
+      const m = Number(month) - 1;
+      const startUTC = Date.UTC(yNow, m, 1, 0, 0, 0, 0);
+      const endUTC = Date.UTC(yNow, m + 1, 1, 0, 0, 0, 0);
+      start = new Date(startUTC - TZ_OFFSET_MS);
+      end = new Date(endUTC - TZ_OFFSET_MS);
     }
 
-    // --- 2) DB query with range (avoid post-filter mistakes)
-    const query = { batch: batchId };
-    if (start && end) query.date = { $gte: start, $lt: end };
-
-    const records = await Attendance.find(query)
-      .populate("student", "name")
-      .populate("batch", "name")
-      .sort({ date: 1 })
-      .lean();
-
-    if (!records.length) {
-      return res.status(404).json({ message: "No records to export for the selected range" });
+    // 3) Apply range filter
+    let filteredRecords = records;
+    if (start && end) {
+      const startMs = start.getTime();
+      const endMs = end.getTime();
+      filteredRecords = records.filter(r => {
+        const t = new Date(r.date).getTime();
+        return t >= startMs && t < endMs;
+      });
     }
 
-    // --- 3) Build workbook (same as before)
+    if (!filteredRecords.length) {
+      return res.status(404).json({ message: "No records to export" });
+    }
+
+    // 4) ExcelJS workbook
     const workbook = new ExcelJS.Workbook();
 
     // Batch name
     let batchName = "Attendance";
-    if (records[0].batch?.name) {
-      batchName = records[0].batch.name.trim().replace(/\s+/g, "_");
-    } else if (records[0].batchName) {
-      batchName = records[0].batchName.trim().replace(/\s+/g, "_");
-    } else if (records[0].batch_name) {
-      batchName = records[0].batch_name.trim().replace(/\s+/g, "_");
-    } else if (records[0].class?.name) {
-      batchName = records[0].class.name.trim().replace(/\s+/g, "_");
-    } else if (records[0].className) {
-      batchName = records[0].className.trim().replace(/\s+/g, "_");
+    if (filteredRecords[0].batch?.name) {
+      batchName = filteredRecords[0].batch.name.trim().replace(/\s+/g, "_");
+    } else if (filteredRecords[0].batchName) {
+      batchName = filteredRecords[0].batchName.trim().replace(/\s+/g, "_");
+    } else if (filteredRecords[0].batch_name) {
+      batchName = filteredRecords[0].batch_name.trim().replace(/\s+/g, "_");
+    } else if (filteredRecords[0].class?.name) {
+      batchName = filteredRecords[0].class.name.trim().replace(/\s+/g, "_");
+    } else if (filteredRecords[0].className) {
+      batchName = filteredRecords[0].className.trim().replace(/\s+/g, "_");
     }
 
     const sheet = workbook.addWorksheet(batchName);
@@ -98,37 +109,44 @@ export const exportAttendanceExcel = async (req, res) => {
       return `${y}-${m}-${day}`;
     };
 
-    const dates = [...new Set(records.map(r => localDateKey(r.date)))].sort();
-    const students = [...new Map(records.map(r => [String(r.student?._id || r.student), r.student?.name || r.studentName || ""])).entries()];
+    // Unique dates
+    const dates = [...new Set(filteredRecords.map(r => localDateKey(r.date)))].sort();
 
-    // Month groups for merged headers
+    // Unique students
+    const students = [
+      ...new Map(filteredRecords.map(r => [r.student._id.toString(), r.student.name])).entries()
+    ];
+
+    // Month groups
     const monthGroups = [];
-    for (let i = 0; i < dates.length;) {
-      const d0 = new Date(dates[i]);
-      const y = d0.getFullYear(), m = d0.getMonth();
-      let j = i;
-      while (j + 1 < dates.length) {
-        const dNext = new Date(dates[j + 1]);
-        if (dNext.getFullYear() !== y || dNext.getMonth() !== m) break;
-        j++;
+    let startIdx = 0;
+    while (startIdx < dates.length) {
+      const d0 = new Date(dates[startIdx]);
+      const y = d0.getFullYear();
+      const m = d0.getMonth();
+      let endIdx = startIdx;
+      while (
+        endIdx + 1 < dates.length &&
+        new Date(dates[endIdx + 1]).getFullYear() === y &&
+        new Date(dates[endIdx + 1]).getMonth() === m
+      ) {
+        endIdx++;
       }
-      monthGroups.push({
-        label: d0.toLocaleString("en-US", { month: "long", year: "numeric" }),
-        start: i,
-        end: j
-      });
-      i = j + 1;
+      const label = d0.toLocaleString("en-US", { month: "long", year: "numeric" });
+      monthGroups.push({ label, start: startIdx, end: endIdx });
+      startIdx = endIdx + 1;
     }
 
     // Headers
-    sheet.addRow(["Student Name", ...dates.map(() => "")]); // row 1 (months merged later)
-    const headerRow = sheet.addRow(["Student Name", ...dates]); // row 2
+    const monthHeaderRow = sheet.addRow(["Student Name", ...dates.map(() => "")]);
+    const headerRow = sheet.addRow(["Student Name", ...dates]);
     headerRow.font = { bold: true };
     sheet.mergeCells(1, 1, 2, 1);
     const nameHeaderCell = sheet.getCell(1, 1);
     nameHeaderCell.value = "Student Name";
     nameHeaderCell.alignment = { vertical: "middle", horizontal: "center" };
 
+    // Merge month blocks
     monthGroups.forEach(({ label, start, end }) => {
       const startCol = 2 + start;
       const endCol = 2 + end;
@@ -137,15 +155,20 @@ export const exportAttendanceExcel = async (req, res) => {
       cell.value = label;
       cell.font = { bold: true };
       cell.alignment = { vertical: "middle", horizontal: "center" };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
+      cell.border = {
+        top: { style: "thin", color: { argb: "FFE2E8F0" } },
+        bottom: { style: "thin", color: { argb: "FFE2E8F0" } },
+      };
     });
 
     // Data rows
     students.forEach(([studentId, studentName]) => {
       const row = [studentName];
       dates.forEach((dateKey) => {
-        const rec = records.find(
+        const rec = filteredRecords.find(
           (r) =>
-            String(r.student?._id || r.student) === studentId &&
+            r.student._id.toString() === studentId &&
             localDateKey(r.date) === dateKey
         );
         row.push(rec ? `${rec.status}${rec.remarks ? ` (${rec.remarks})` : ""}` : "");
@@ -153,48 +176,91 @@ export const exportAttendanceExcel = async (req, res) => {
       sheet.addRow(row);
     });
 
-    // Styling
-    sheet.columns = headerRow.values.map(() => ({ width: 18 }));
-    sheet.eachRow((row, idx) => {
+    sheet.columns = headerRow.values.map(() => ({ width: 20 }));
+
+    // Styles
+    sheet.eachRow((row, rowNumber) => {
       row.alignment = { vertical: "middle", horizontal: "center" };
-      if (idx >= 3) {
+      if (rowNumber >= 3) {
         row.fill = {
           type: "pattern",
           pattern: "solid",
-          fgColor: { argb: idx % 2 === 0 ? "FFEFEFEF" : "FFFFFFFF" },
+          fgColor: { argb: rowNumber % 2 === 0 ? "FFEFEFEF" : "FFFFFFFF" },
         };
       }
+    });
+
+    sheet.eachRow((row) => {
       row.eachCell((cell) => {
         cell.border = {
-          top: { style: "thin" }, left: { style: "thin" },
-          bottom: { style: "thin" }, right: { style: "thin" },
+          top: { style: "thin" },
+          left: { style: "thin" },
+          bottom: { style: "thin" },
+          right: { style: "thin" },
         };
       });
     });
 
-    // Filename based on first/last date in the export
-    const first = new Date(dates[0]);
-    const last  = new Date(dates[dates.length - 1]);
-    const sameMonth = first.getFullYear() === last.getFullYear() && first.getMonth() === last.getMonth();
-    let fileName;
-    if (sameMonth) {
-      fileName = `${batchName}_${first.toLocaleString("en-US", { month: "long" })}_${first.getFullYear()}.xlsx`;
-    } else {
-      const a = `${first.toLocaleString("en-US", { month: "short" })}${first.getFullYear()}`;
-      const b = `${last.toLocaleString("en-US", { month: "short" })}${last.getFullYear()}`;
-      fileName = `${batchName}_${a}_to_${b}.xlsx`;
+    monthGroups.forEach(({ start }) => {
+      const startCol = 2 + start;
+      for (let r = 1; r <= sheet.rowCount; r++) {
+        const cell = sheet.getRow(r).getCell(startCol);
+        cell.border = { ...cell.border, left: { style: "thick" } };
+      }
+    });
+
+    const firstDataRow = 3;
+    const lastCol = 1 + dates.length;
+    for (let r = firstDataRow; r <= sheet.rowCount; r++) {
+      const row = sheet.getRow(r);
+      for (let c = 2; c <= lastCol; c++) {
+        const cell = row.getCell(c);
+        const text = String(cell.value ?? "");
+        if (text.startsWith("Present")) {
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD1FAE5" } };
+        } else if (text.startsWith("Absent")) {
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
+        }
+      }
     }
 
-    // Response headers and stream
+    // Filename
+    const sortedDates = [...dates];
+    const startDate = new Date(sortedDates[0]);
+    const endDate = new Date(sortedDates[sortedDates.length - 1]);
+    const isSameMonth =
+      startDate.getMonth() === endDate.getMonth() &&
+      startDate.getFullYear() === endDate.getFullYear();
+
+    let fileName;
+    if (isSameMonth) {
+      const monthName = startDate.toLocaleString("en-US", { month: "long" });
+      const yearNum = startDate.getFullYear();
+      fileName = `${batchName}_${monthName}_${yearNum}.xlsx`;
+    } else {
+      const startMonth = startDate.toLocaleString("en-US", { month: "short" });
+      const endMonth = endDate.toLocaleString("en-US", { month: "short" });
+      const startYear = startDate.getFullYear();
+      const endYear = endDate.getFullYear();
+      if (startYear === endYear) {
+        fileName = `${batchName}_${startMonth}_to_${endMonth}_${startYear}.xlsx`;
+      } else {
+        fileName = `${batchName}_${startMonth}${startYear}_to_${endMonth}${endYear}.xlsx`;
+      }
+    }
+
+    // Headers
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
     res.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
 
     await workbook.xlsx.write(res);
     res.end();
   } catch (err) {
     console.error("exportAttendanceExcel error:", err);
-    // Surface a helpful message
     res.status(500).json({ message: "Failed to export Excel", error: err.message });
   }
 };
