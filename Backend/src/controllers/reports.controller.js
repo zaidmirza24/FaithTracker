@@ -15,45 +15,59 @@ export const attendanceSummary = async (req, res) => {
   }
 };
 
+// import ExcelJS from "exceljs";
+// import { getFilteredAttendance } from "../services/attendance.service.js";
 
 export const exportAttendanceExcel = async (req, res) => {
   try {
-    const filters = req.query;
-    const records = await getFilteredAttendance(filters);
+    const { year, month, period } = req.query;
 
-    // ── ENFORCE IST FILTER LOCALLY (if service didn't) ───────────────────────
-    const { year, month } = req.query;
+    // 1) Fetch records first
+    const records = await getFilteredAttendance(req.query);
 
+    // 2) Compute date range
     const TZ_OFFSET_MIN = 330; // Asia/Kolkata
-    const TZ_OFFSET_MS  = TZ_OFFSET_MIN * 60 * 1000;
-
-    const yNum = year && /^\d{4}$/.test(String(year)) ? Number(year) : null;
-    const mNum = month != null && month !== "" && !Number.isNaN(Number(month))
-      ? Number(month)
-      : null;
+    const TZ_OFFSET_MS = TZ_OFFSET_MIN * 60 * 1000;
 
     let start = null, end = null;
-    if (yNum && mNum && mNum >= 1 && mNum <= 12) {
-      // [YYYY-MM-01 00:00 IST, YYYY-(MM+1)-01 00:00 IST)
-      const startUTC = Date.UTC(yNum, mNum - 1, 1, 0, 0, 0, 0);
-      const endUTC   = Date.UTC(yNum, mNum,     1, 0, 0, 0, 0);
+
+    const now = new Date();
+    const yNow = now.getFullYear();
+    const mNow = now.getMonth();
+
+    if (period === "3m" || period === "6m") {
+      const months = period === "3m" ? 3 : 6;
+
+      // end = first day of next month (local IST)
+      const endUTC = Date.UTC(yNow, mNow + 1, 1, 0, 0, 0, 0);
+      end = new Date(endUTC - TZ_OFFSET_MS);
+
+      // start = first day of (currentMonth - (months - 1))
+      const anchor = new Date(Date.UTC(yNow, mNow, 1, 0, 0, 0, 0));
+      anchor.setMonth(anchor.getMonth() - (months - 1));
+      start = new Date(anchor.getTime() - TZ_OFFSET_MS);
+    } else if (year && month) {
+      const y = Number(year);
+      const m = Number(month) - 1;
+      const startUTC = Date.UTC(y, m, 1, 0, 0, 0, 0);
+      const endUTC = Date.UTC(y, m + 1, 1, 0, 0, 0, 0);
       start = new Date(startUTC - TZ_OFFSET_MS);
-      end   = new Date(endUTC   - TZ_OFFSET_MS);
-    } else if (yNum) {
-      // Whole year in IST
-      const startUTC = Date.UTC(yNum,     0, 1, 0, 0, 0, 0);
-      const endUTC   = Date.UTC(yNum + 1, 0, 1, 0, 0, 0, 0);
+      end = new Date(endUTC - TZ_OFFSET_MS);
+    } else if (year) {
+      const y = Number(year);
+      const startUTC = Date.UTC(y, 0, 1, 0, 0, 0, 0);
+      const endUTC = Date.UTC(y + 1, 0, 1, 0, 0, 0, 0);
       start = new Date(startUTC - TZ_OFFSET_MS);
-      end   = new Date(endUTC   - TZ_OFFSET_MS);
-    } else if (mNum && mNum >= 1 && mNum <= 12) {
-      // Month without year → assume current IST year
-      const nowYearUTC = new Date().getUTCFullYear();
-      const startUTC = Date.UTC(nowYearUTC, mNum - 1, 1, 0, 0, 0, 0);
-      const endUTC   = Date.UTC(nowYearUTC, mNum,     1, 0, 0, 0, 0);
+      end = new Date(endUTC - TZ_OFFSET_MS);
+    } else if (month) {
+      const m = Number(month) - 1;
+      const startUTC = Date.UTC(yNow, m, 1, 0, 0, 0, 0);
+      const endUTC = Date.UTC(yNow, m + 1, 1, 0, 0, 0, 0);
       start = new Date(startUTC - TZ_OFFSET_MS);
-      end   = new Date(endUTC   - TZ_OFFSET_MS);
+      end = new Date(endUTC - TZ_OFFSET_MS);
     }
 
+    // 3) Apply range filter
     let filteredRecords = records;
     if (start && end) {
       const startMs = start.getTime();
@@ -67,11 +81,11 @@ export const exportAttendanceExcel = async (req, res) => {
     if (!filteredRecords.length) {
       return res.status(404).json({ message: "No records to export" });
     }
-    // ─────────────────────────────────────────────────────────────────────────
 
+    // 4) ExcelJS workbook
     const workbook = new ExcelJS.Workbook();
 
-    // Keep your existing sheet naming logic (use filteredRecords[0])
+    // Batch name
     let batchName = "Attendance";
     if (filteredRecords[0].batch?.name) {
       batchName = filteredRecords[0].batch.name.trim().replace(/\s+/g, "_");
@@ -87,24 +101,23 @@ export const exportAttendanceExcel = async (req, res) => {
 
     const sheet = workbook.addWorksheet(batchName);
 
-    // Local date key helper (keeps your existing formatting)
     const localDateKey = (value) => {
       const d = new Date(value);
       const y = d.getFullYear();
       const m = String(d.getMonth() + 1).padStart(2, "0");
       const day = String(d.getDate()).padStart(2, "0");
-      return `${y}-${m}-${day}`; // YYYY-MM-DD in server's local time
+      return `${y}-${m}-${day}`;
     };
 
-    // 1) Unique dates (sorted) — from filteredRecords
+    // Unique dates
     const dates = [...new Set(filteredRecords.map(r => localDateKey(r.date)))].sort();
 
-    // 2) Unique students — from filteredRecords
+    // Unique students
     const students = [
       ...new Map(filteredRecords.map(r => [r.student._id.toString(), r.student.name])).entries()
     ];
 
-    // 3) Month groups over dates for visual separation
+    // Month groups
     const monthGroups = [];
     let startIdx = 0;
     while (startIdx < dates.length) {
@@ -124,18 +137,16 @@ export const exportAttendanceExcel = async (req, res) => {
       startIdx = endIdx + 1;
     }
 
-    // ── Headers
+    // Headers
     const monthHeaderRow = sheet.addRow(["Student Name", ...dates.map(() => "")]);
     const headerRow = sheet.addRow(["Student Name", ...dates]);
     headerRow.font = { bold: true };
-
-    // Merge A1:A2 (Student Name)
     sheet.mergeCells(1, 1, 2, 1);
     const nameHeaderCell = sheet.getCell(1, 1);
     nameHeaderCell.value = "Student Name";
     nameHeaderCell.alignment = { vertical: "middle", horizontal: "center" };
 
-    // Merge month blocks in row 1
+    // Merge month blocks
     monthGroups.forEach(({ label, start, end }) => {
       const startCol = 2 + start;
       const endCol = 2 + end;
@@ -151,10 +162,9 @@ export const exportAttendanceExcel = async (req, res) => {
       };
     });
 
-    // Data rows (start at row 3) — lookup from filteredRecords
+    // Data rows
     students.forEach(([studentId, studentName]) => {
       const row = [studentName];
-
       dates.forEach((dateKey) => {
         const rec = filteredRecords.find(
           (r) =>
@@ -163,14 +173,12 @@ export const exportAttendanceExcel = async (req, res) => {
         );
         row.push(rec ? `${rec.status}${rec.remarks ? ` (${rec.remarks})` : ""}` : "");
       });
-
       sheet.addRow(row);
     });
 
-    // Column widths
     sheet.columns = headerRow.values.map(() => ({ width: 20 }));
 
-    // Alignment + zebra for data rows only
+    // Styles
     sheet.eachRow((row, rowNumber) => {
       row.alignment = { vertical: "middle", horizontal: "center" };
       if (rowNumber >= 3) {
@@ -182,7 +190,6 @@ export const exportAttendanceExcel = async (req, res) => {
       }
     });
 
-    // Thin borders for all cells
     sheet.eachRow((row) => {
       row.eachCell((cell) => {
         cell.border = {
@@ -194,32 +201,30 @@ export const exportAttendanceExcel = async (req, res) => {
       });
     });
 
-    // Thick left border at the start of each month block
     monthGroups.forEach(({ start }) => {
-      const startCol = 2 + start; // first date column of that month
+      const startCol = 2 + start;
       for (let r = 1; r <= sheet.rowCount; r++) {
         const cell = sheet.getRow(r).getCell(startCol);
         cell.border = { ...cell.border, left: { style: "thick" } };
       }
     });
 
-    // Color-code Present/Absent cells
     const firstDataRow = 3;
-    const lastCol = 1 + dates.length; // A=1, dates start at col 2
+    const lastCol = 1 + dates.length;
     for (let r = firstDataRow; r <= sheet.rowCount; r++) {
       const row = sheet.getRow(r);
       for (let c = 2; c <= lastCol; c++) {
         const cell = row.getCell(c);
         const text = String(cell.value ?? "");
         if (text.startsWith("Present")) {
-          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD1FAE5" } }; // green-100
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD1FAE5" } };
         } else if (text.startsWith("Absent")) {
-          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } }; // red-100
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
         }
       }
     }
 
-    // Filename logic (unchanged)
+    // Filename
     const sortedDates = [...dates];
     const startDate = new Date(sortedDates[0]);
     const endDate = new Date(sortedDates[sortedDates.length - 1]);
@@ -237,7 +242,6 @@ export const exportAttendanceExcel = async (req, res) => {
       const endMonth = endDate.toLocaleString("en-US", { month: "short" });
       const startYear = startDate.getFullYear();
       const endYear = endDate.getFullYear();
-
       if (startYear === endYear) {
         fileName = `${batchName}_${startMonth}_to_${endMonth}_${startYear}.xlsx`;
       } else {
@@ -256,6 +260,7 @@ export const exportAttendanceExcel = async (req, res) => {
     await workbook.xlsx.write(res);
     res.end();
   } catch (err) {
+    console.error("exportAttendanceExcel error:", err);
     res.status(500).json({ message: "Failed to export Excel", error: err.message });
   }
 };

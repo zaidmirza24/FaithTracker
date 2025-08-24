@@ -3,7 +3,7 @@ import axios from "axios";
 import { useParams } from "react-router-dom";
 import { API_BASE } from "../config/api";
 
-const STATUS_OPTIONS = ["Present", "Absent", "Late", "Excused"];
+const STATUS_OPTIONS = ["Present", "Absent"];
 // const API_BASE = "http://localhost:5000/api/teacher";
 
 const TeacherAttendance = () => {

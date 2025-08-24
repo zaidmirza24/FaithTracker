@@ -52,40 +52,84 @@ export const getBatchesByTeacher = async (req, res) => {
 
 // Get attendance with optional filters: city, teacher, batch, date
 // admin.controller.js
+// GET /admin/attendance?batchId=...&period=3m|6m&year=YYYY&month=1-12
 export const getAttendance = async (req, res) => {
   try {
-    const { batchId, year, month } = req.query;
+    const { batchId, period, year, month } = req.query;
+    if (!batchId) {
+      return res.status(400).json({ message: "batchId is required" });
+    }
 
-    if (!batchId) return res.status(400).json({ message: "batchId is required" });
+    const filter = { batch: batchId };
 
-    let filter = { batch: batchId };
+    // --- date range calculation ---
+    let startDate = null;
+    let endDate = null;
 
-    if (year) {
-      const y = parseInt(year);
-      let startDate = new Date(y, 0, 1);
-      let endDate = new Date(y + 1, 0, 1);
+    // helper: first day of month at local midnight
+    const firstOfMonth = (y, m0) => {
+      const d = new Date(y, m0, 1);
+      d.setHours(0, 0, 0, 0);
+      return d;
+    };
 
-      if (month) {
-        const m = parseInt(month) - 1;
-        startDate = new Date(y, m, 1);
-        endDate = new Date(y, m + 1, 1);
-      }
+    // helper: first day of next month
+    const firstOfNextMonth = (y, m0) => firstOfMonth(y, m0 + 1);
 
+    if (period === "3m" || period === "6m") {
+      const months = period === "3m" ? 3 : 6;
+
+      const now = new Date();
+      const y = now.getFullYear();
+      const m0 = now.getMonth(); // 0-11
+
+      // end = first of next month (exclusive)
+      endDate = firstOfNextMonth(y, m0);
+
+      // start = first of (currentMonth - (months - 1))
+      const anchor = new Date(y, m0, 1); // first of current month
+      anchor.setHours(0, 0, 0, 0);
+      anchor.setMonth(anchor.getMonth() - (months - 1));
+      startDate = new Date(anchor); // already at 00:00:00.000
+
+    } else if (year && month) {
+      const y = Number(year);
+      const m0 = Number(month) - 1;
+      startDate = firstOfMonth(y, m0);
+      endDate = firstOfNextMonth(y, m0);
+    } else if (year) {
+      const y = Number(year);
+      startDate = firstOfMonth(y, 0);      // Jan 1
+      endDate = firstOfMonth(y + 1, 0);    // Jan 1 next year
+    }
+    // --------------------------------
+
+    if (startDate && endDate) {
       filter.date = { $gte: startDate, $lt: endDate };
     }
 
-    // const records = await Attendance.find(filter).populate("student");
+    // Debug (temporary): check what range actually applied
+    console.log("GET /admin/attendance", {
+      batchId,
+      period,
+      year,
+      month,
+      startDate,
+      endDate,
+    });
+
     const records = await Attendance.find(filter)
-      .populate("student", "name")   // only bring student name + email
-      .populate("batch", "name");     
-    res.json(records);
+      .populate("student", "name")
+      .populate("batch", "name");
+
+    return res.json(records);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Failed to fetch attendance", error: err.message });
+    console.error("getAttendance error:", err);
+    return res
+      .status(500)
+      .json({ message: "Failed to fetch attendance", error: err.message });
   }
 };
-
-
 
 
 // ✅ Admin creates a new teacher

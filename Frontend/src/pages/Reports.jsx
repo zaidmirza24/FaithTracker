@@ -28,8 +28,14 @@ const Reports = () => {
   // Common
   const [batches, setBatches] = useState([]);
   const [selectedBatch, setSelectedBatch] = useState("");
+
+  // ✅ Add-on quick range ("" | "3m" | "6m")
+  const [period, setPeriod] = useState("");
+
+  // Keep your Year/Month as-is (used when period is empty)
   const [year, setYear] = useState(new Date().getFullYear().toString());
   const [month, setMonth] = useState(""); // "" = all
+
   const [attendance, setAttendance] = useState([]);
 
   const [loadingInit, setLoadingInit] = useState(true);
@@ -123,26 +129,34 @@ const Reports = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTeacher, role]);
 
+  // ---------- Build params consistently ----------
+  const buildParams = () => {
+    const params = {};
+    if (period) {
+      params.period = period; // quick range takes priority
+    } else {
+      const y = typeof year === "string" ? year.trim() : year;
+      if (y && /^\d{4}$/.test(String(y))) params.year = String(y);
+      if (month !== "" && !Number.isNaN(Number(month))) {
+        const m = Number(month);
+        if (m >= 1 && m <= 12) params.month = String(m);
+      }
+    }
+    params._ = Date.now(); // cache buster
+    return params;
+  };
+
   // ---------- Fetch attendance (role-aware endpoint) ----------
   const fetchAttendance = async () => {
     if (!selectedBatch) return;
     setLoading(true);
     try {
-      const params = {};
-      const y = typeof year === "string" ? year.trim() : year;
-      if (y && /^\d{4}$/.test(String(y))) params.year = String(y);
-      if (month !== "" && !Number.isNaN(Number(month))) {
-        const m = Number(month);
-        if (m >= 1 && m <= 12) params.month = String(m); // 1..12
-      }
-      params._ = Date.now();
+      const params = buildParams();
 
       let url;
       if (role === "teacher") {
-        // teacher history endpoint (you already have)
         url = `${API_BASE}/teacher/attendance/history/${selectedBatch}`;
       } else {
-        // admin attendance endpoint (used in AdminDashboard)
         url = `${API_BASE}/admin/attendance`;
         params.batchId = selectedBatch;
       }
@@ -152,7 +166,6 @@ const Reports = () => {
         params,
       });
 
-      // Normalise: both endpoints return array of records
       const data = Array.isArray(res.data) ? res.data : [];
       setAttendance(data);
       setError("");
@@ -164,34 +177,53 @@ const Reports = () => {
     }
   };
 
-  // Auto-refetch when batch/year/month change
+  // Auto-refetch when filters change
   useEffect(() => {
     if (!selectedBatch) return;
     const t = setTimeout(fetchAttendance, 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedBatch, year, month, role]);
+  }, [selectedBatch, year, month, period, role]);
 
-  // ---------- Build chart data: count "Present" per student ----------
+  // ---------- Build chart data: Present + Absent counts per student ----------
   const chartData = useMemo(() => {
     if (!attendance.length) return [];
     const map = new Map();
+
     for (const rec of attendance) {
-      // support both populated & lean structures
       const name =
         rec?.student?.name ||
         rec?.studentName ||
         rec?.student_name ||
         "Unknown";
+
       const status = String(rec?.status || "").toLowerCase();
-      if (!map.has(name)) map.set(name, 0);
-      if (status === "present") map.set(name, map.get(name) + 1);
+      if (!map.has(name)) map.set(name, { present: 0, absent: 0, total: 0 });
+
+      // Only count Present/Absent toward % so bars sum to 100
+      if (status === "present" || status === "absent") {
+        const o = map.get(name);
+        o.total += 1;
+        if (status === "present") o.present += 1;
+        else o.absent += 1;
+      }
     }
-    return Array.from(map.entries()).map(([name, presentDays]) => ({
-      name,
-      presentDays,
-    }));
+
+    return Array.from(map.entries()).map(([name, v]) => {
+      const total = v.total || 0;
+      const presentPct = total ? Math.round((v.present / total) * 100) : 0;
+      const absentPct = 100 - presentPct;
+      return {
+        name,
+        presentPct,
+        absentPct,
+        presentCount: v.present,
+        absentCount: v.absent,
+        total,
+      };
+    });
   }, [attendance]);
+
 
   // ---------- UI ----------
   if (loadingInit) {
@@ -211,7 +243,7 @@ const Reports = () => {
             <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
               Reports
             </h1>
-            <p className="text-gray-600 mt-1">Student vs Days Present</p>
+            <p className="text-gray-600 mt-1">Present vs Absent per student</p>
           </div>
 
           {/* Filters */}
@@ -287,6 +319,23 @@ const Reports = () => {
               </select>
             </div>
 
+            {/* ✅ Quick Range */}
+            <div className="flex flex-col w-44">
+              <label className="text-sm font-semibold text-gray-700 mb-2">
+                Quick Range
+              </label>
+              <select
+                value={period}
+                onChange={(e) => setPeriod(e.target.value)}
+                className="px-4 py-3 bg-white/80 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-green-100 outline-none"
+              >
+                <option value="">None</option>
+                <option value="3m">Last 3 months</option>
+                <option value="6m">Last 6 months</option>
+              </select>
+            </div>
+
+            {/* Year/Month (disabled when quick range is active) */}
             <div className="flex flex-col w-40">
               <label className="text-sm font-semibold text-gray-700 mb-2">
                 Year
@@ -296,7 +345,9 @@ const Reports = () => {
                 placeholder="2025"
                 value={year}
                 onChange={(e) => setYear(e.target.value)}
-                className="px-4 py-3 bg-white/80 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none"
+                disabled={!!period}
+                className={`px-4 py-3 bg-white/80 border-2 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none ${period ? "opacity-60 cursor-not-allowed" : "border-gray-200"
+                  }`}
               />
             </div>
 
@@ -307,7 +358,9 @@ const Reports = () => {
               <select
                 value={month}
                 onChange={(e) => setMonth(e.target.value)}
-                className="px-4 py-3 bg-white/80 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-purple-100 outline-none"
+                disabled={!!period}
+                className={`px-4 py-3 bg-white/80 border-2 rounded-xl focus:ring-4 focus:ring-purple-100 outline-none ${period ? "opacity-60 cursor-not-allowed" : "border-gray-200"
+                  }`}
               >
                 <option value="">All Months</option>
                 {[...Array(12)].map((_, i) => (
@@ -344,7 +397,7 @@ const Reports = () => {
         <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/50 p-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold text-gray-800">
-              Days Present by Student
+              Present (green) vs Absent (red) — per student
             </h2>
             <div className="text-sm text-gray-600">
               {chartData.length} student{chartData.length !== 1 ? "s" : ""}
@@ -371,17 +424,23 @@ const Reports = () => {
                     textAnchor="end"
                     height={80}
                   />
-                  <YAxis allowDecimals={false} />
-                  <Tooltip />
-                  <Legend />
-                  <Bar
-                    dataKey="presentDays"
-                    name="Days Present"
-                    fill="#10B981"
-                    radius={[6, 6, 0, 0]}
+                  <YAxis domain={[0, 100]} tickFormatter={(t) => `${t}%`} />
+                  <Tooltip
+                    formatter={(value, name) => [`${value}%`, name]}
+                    labelFormatter={(_, payload) => {
+                      const p = payload?.[0]?.payload;
+                      if (!p) return "";
+                      return `${p.name} — ${p.presentCount}/${p.total} present (${p.presentPct}%)`;
+                    }}
                   />
+                  <Legend />
+                  {/* side-by-side percentage bars */}
+                  <Bar dataKey="presentPct" name="Present %" fill="#10B981" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="absentPct" name="Absent %" fill="#EF4444" radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
+
+
             </div>
           )}
         </div>

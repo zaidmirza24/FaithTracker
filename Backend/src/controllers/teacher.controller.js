@@ -288,7 +288,7 @@ export const getTodayAttendance = async (req, res) => {
 export const getAttendanceHistory = async (req, res) => {
   try {
     const { batchId } = req.params;
-    const { year, month } = req.query; // year=YYYY, month=1..12
+    const { period, year, month } = req.query; // add: period=3m|6m
 
     if (!mongoose.Types.ObjectId.isValid(batchId)) {
       return res.status(400).json({ message: "Invalid batch ID" });
@@ -296,10 +296,19 @@ export const getAttendanceHistory = async (req, res) => {
 
     const query = { batch: batchId };
 
-    // ---- Build IST (UTC+05:30) boundaries so months match what users see ----
+    // ---- IST month boundaries (UTC+05:30) ----
     const TZ_OFFSET_MIN = 330; // Asia/Kolkata
     const TZ_OFFSET_MS  = TZ_OFFSET_MIN * 60 * 1000;
 
+    // helpers: first day of month in IST expressed as a JS Date
+    const istMonthStart = (y, m0) => {
+      // 00:00 IST of given y,m => in UTC is (y,m,1 00:00) - 5:30
+      const startUTCms = Date.UTC(y, m0, 1, 0, 0, 0, 0);
+      return new Date(startUTCms - TZ_OFFSET_MS);
+    };
+    const istNextMonthStart = (y, m0) => istMonthStart(y, m0 + 1);
+
+    // parse inputs
     const yNum = year && /^\d{4}$/.test(String(year)) ? Number(year) : null;
     const mNum = month != null && month !== "" && !Number.isNaN(Number(month))
       ? Number(month)
@@ -307,26 +316,43 @@ export const getAttendanceHistory = async (req, res) => {
 
     let start, end;
 
-    if (yNum && mNum && mNum >= 1 && mNum <= 12) {
-      // [YYYY-MM-01 00:00 IST, YYYY-(MM+1)-01 00:00 IST)
-      const startUTCms = Date.UTC(yNum, mNum - 1, 1, 0, 0, 0, 0);
-      const endUTCms   = Date.UTC(yNum, mNum,     1, 0, 0, 0, 0);
-      start = new Date(startUTCms - TZ_OFFSET_MS);
-      end   = new Date(endUTCms   - TZ_OFFSET_MS);
+    // ---- Priority 1: period=3m|6m (full calendar months, ending at next month start) ----
+    if (period === "3m" || period === "6m") {
+      const months = period === "3m" ? 3 : 6;
+
+      // Get "now" in IST to decide the current calendar month
+      const nowUTC = new Date();
+      const nowIST = new Date(nowUTC.getTime() + TZ_OFFSET_MS);
+      const yNow = nowIST.getUTCFullYear();
+      const mNow = nowIST.getUTCMonth(); // 0..11 (IST month via UTC getters on shifted date)
+
+      // end = first day of next month (exclusive)
+      end = istNextMonthStart(yNow, mNow);
+
+      // start = first day of (currentMonth - (months - 1))
+      // anchor at first of current month in IST, then move back N-1 months
+      let aY = yNow, aM = mNow - (months - 1);
+      // normalize year/month
+      while (aM < 0) { aM += 12; aY -= 1; }
+      start = istMonthStart(aY, aM);
+
+    // ---- Priority 2: year + month ----
+    } else if (yNum && mNum && mNum >= 1 && mNum <= 12) {
+      start = istMonthStart(yNum, mNum - 1);
+      end   = istNextMonthStart(yNum, mNum - 1);
+
+    // ---- Priority 3: year only ----
     } else if (yNum) {
-      // Whole year in IST
-      const startUTCms = Date.UTC(yNum,     0, 1, 0, 0, 0, 0);
-      const endUTCms   = Date.UTC(yNum + 1, 0, 1, 0, 0, 0, 0);
-      start = new Date(startUTCms - TZ_OFFSET_MS);
-      end   = new Date(endUTCms   - TZ_OFFSET_MS);
+      start = istMonthStart(yNum, 0);        // Jan 1 (IST)
+      end   = istMonthStart(yNum + 1, 0);    // Jan 1 next year (IST)
+
+    // ---- Priority 4: month only (assume current IST year) ----
     } else if (mNum && mNum >= 1 && mNum <= 12) {
-      // Month without year => assume current year (IST)
-      const now = new Date();
-      const nowYear = now.getUTCFullYear(); // ok since we convert to IST below
-      const startUTCms = Date.UTC(nowYear, mNum - 1, 1, 0, 0, 0, 0);
-      const endUTCms   = Date.UTC(nowYear, mNum,     1, 0, 0, 0, 0);
-      start = new Date(startUTCms - TZ_OFFSET_MS);
-      end   = new Date(endUTCms   - TZ_OFFSET_MS);
+      const nowUTC = new Date();
+      const nowIST = new Date(nowUTC.getTime() + TZ_OFFSET_MS);
+      const yNow = nowIST.getUTCFullYear();
+      start = istMonthStart(yNow, mNum - 1);
+      end   = istNextMonthStart(yNow, mNum - 1);
     }
 
     if (start && end) {
@@ -335,7 +361,8 @@ export const getAttendanceHistory = async (req, res) => {
 
     const records = await Attendance.find(query)
       .populate("student", "name")
-      .sort({ date: -1 });
+      .sort({ date: -1 }) // keep your existing sort
+      .lean();
 
     if (!records || records.length === 0) {
       return res.status(404).json({ message: "No attendance records found for this batch" });
@@ -347,3 +374,4 @@ export const getAttendanceHistory = async (req, res) => {
     res.status(500).json({ message: "Failed to fetch attendance history", error: err.message });
   }
 };
+

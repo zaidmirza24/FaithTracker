@@ -8,20 +8,28 @@ const AttendanceHistory = () => {
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
   const currentYear = new Date().getFullYear().toString();
   const [year, setYear] = useState(currentYear);
   const [month, setMonth] = useState("");
+  const [period, setPeriod] = useState(""); // ✅ new quick range ("" | "3m" | "6m")
+
   const token = localStorage.getItem("token");
 
-  // Build safe params (no behavior change to your fields)
+  // Build safe params
   const buildFilterParams = () => {
     const params = {};
-    const y = (typeof year === "string" ? year.trim() : year);
+    if (period) {
+      params.period = period; // quick range takes priority
+      return params;
+    }
+
+    const y = typeof year === "string" ? year.trim() : year;
     if (y && /^\d{4}$/.test(String(y))) params.year = String(y);
 
     if (month !== "" && !Number.isNaN(Number(month))) {
       const m = Number(month);
-      if (m >= 1 && m <= 12) params.month = String(m); // 1..12
+      if (m >= 1 && m <= 12) params.month = String(m);
     }
     return params;
   };
@@ -31,7 +39,7 @@ const AttendanceHistory = () => {
     setLoading(true);
     try {
       const url = `${API_BASE}/teacher/attendance/history/${batchId}`;
-      const params = { ...buildFilterParams(), _: Date.now() }; // cache-buster
+      const params = { ...buildFilterParams(), _: Date.now() };
       const res = await axios.get(url, {
         headers: { Authorization: `Bearer ${token}` },
         params,
@@ -46,21 +54,19 @@ const AttendanceHistory = () => {
     }
   };
 
-  // Initial fetch on mount / batch change
+  // Initial fetch
   useEffect(() => {
     fetchHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchId]);
 
-  // 🔁 Debounced auto-fetch when year/month change (so filters "work" immediately)
+  // Refetch on filter change
   useEffect(() => {
     if (!batchId) return;
-    const t = setTimeout(() => {
-      fetchHistory();
-    }, 300); // small debounce to avoid firing on every keystroke
+    const t = setTimeout(() => fetchHistory(), 300);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [year, month]);
+  }, [year, month, period]);
 
   const onKeyDownFilter = (e) => {
     if (e.key === "Enter") fetchHistory();
@@ -69,8 +75,8 @@ const AttendanceHistory = () => {
   const getStatusBadge = (status = "") => {
     const s = status.toLowerCase();
     if (s === "present") return "bg-emerald-100 text-emerald-800 border-emerald-200";
-    if (s === "absent")  return "bg-red-100 text-red-800 border-red-200";
-    if (s === "late")    return "bg-amber-100 text-amber-800 border-amber-200";
+    if (s === "absent") return "bg-red-100 text-red-800 border-red-200";
+    if (s === "late") return "bg-amber-100 text-amber-800 border-amber-200";
     if (s === "excused") return "bg-sky-100 text-sky-800 border-sky-200";
     return "bg-gray-100 text-gray-800 border-gray-200";
   };
@@ -82,7 +88,7 @@ const AttendanceHistory = () => {
       const qs = new URLSearchParams({ batchId, ...p }).toString();
       const url = `${API_BASE}/reports/export?${qs}`;
       const res = await axios.get(url, {
-        headers: { Authorization: { toString: () => `Bearer ${token}` }.toString() || `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${token}` },
         responseType: "blob",
       });
 
@@ -152,6 +158,25 @@ const AttendanceHistory = () => {
 
           {/* Filters */}
           <div className="flex flex-wrap gap-3">
+            {/* ✅ Quick Range */}
+            <div className="flex flex-col">
+              <label className="text-sm font-semibold text-gray-700 mb-2">
+                <span className="inline-flex items-center">
+                  <span className="w-2.5 h-2.5 rounded-full bg-green-500 mr-2" />
+                  Quick Range
+                </span>
+              </label>
+              <select
+                value={period}
+                onChange={(e) => setPeriod(e.target.value)}
+                className="px-4 py-3 bg-white/80 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-green-100 outline-none w-44"
+              >
+                <option value="">None</option>
+                <option value="3m">Last 3 months</option>
+                <option value="6m">Last 6 months</option>
+              </select>
+            </div>
+
             <div className="flex flex-col">
               <label className="text-sm font-semibold text-gray-700 mb-2">
                 <span className="inline-flex items-center">
@@ -165,7 +190,10 @@ const AttendanceHistory = () => {
                 value={year}
                 onChange={(e) => setYear(e.target.value)}
                 onKeyDown={onKeyDownFilter}
-                className="px-4 py-3 bg-white/80 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none w-40"
+                disabled={!!period}
+                className={`px-4 py-3 bg-white/80 border-2 rounded-xl w-40 focus:ring-4 focus:ring-blue-100 outline-none ${
+                  period ? "opacity-60 cursor-not-allowed" : "border-gray-200"
+                }`}
               />
             </div>
 
@@ -180,7 +208,10 @@ const AttendanceHistory = () => {
                 value={month}
                 onChange={(e) => setMonth(e.target.value)}
                 onKeyDown={onKeyDownFilter}
-                className="px-4 py-3 bg-white/80 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-purple-100 outline-none w-44"
+                disabled={!!period}
+                className={`px-4 py-3 bg-white/80 border-2 rounded-xl w-44 focus:ring-4 focus:ring-purple-100 outline-none ${
+                  period ? "opacity-60 cursor-not-allowed" : "border-gray-200"
+                }`}
               >
                 <option value="">All Months</option>
                 {[...Array(12)].map((_, i) => (
@@ -231,7 +262,7 @@ const AttendanceHistory = () => {
           </div>
         ) : null}
 
-        {/* Table card */}
+        {/* Table */}
         {records.length > 0 && (
           <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/50 overflow-hidden">
             <div className="px-6 py-5 border-b border-gray-200">
@@ -266,7 +297,6 @@ const AttendanceHistory = () => {
                 <tbody className="divide-y divide-gray-200">
                   {groupedByMonth.map((group) => (
                     <React.Fragment key={group.key}>
-                      {/* Month separator row */}
                       <tr>
                         <td
                           colSpan={4}
@@ -280,8 +310,6 @@ const AttendanceHistory = () => {
                           </div>
                         </td>
                       </tr>
-
-                      {/* Rows for this month */}
                       {group.items.map((rec) => (
                         <tr key={rec._id} className="hover:bg-white/60 transition-colors duration-150">
                           <td className="px-6 py-4 text-sm text-gray-800">
@@ -314,7 +342,6 @@ const AttendanceHistory = () => {
                 </tbody>
               </table>
             </div>
-
           </div>
         )}
       </div>

@@ -23,9 +23,14 @@ const AdminDashboard = () => {
   const [selectedBatch, setSelectedBatch] = useState("");
   const [attendance, setAttendance] = useState([]);
   const [summaryData, setSummaryData] = useState([]);
+
+  // ✅ NEW: Quick range add-on ("" | "3m" | "6m")
+  const [period, setPeriod] = useState("");
+
   const currentYear = new Date().getFullYear().toString();
   const [year, setYear] = useState(currentYear);
   const [month, setMonth] = useState("");
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -45,6 +50,7 @@ const AdminDashboard = () => {
       }
     };
     fetchCities();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Fetch teachers
@@ -91,32 +97,38 @@ const AdminDashboard = () => {
     fetchBatches();
   }, [selectedTeacher]);
 
+  // Helper to build query strings consistently
+  const buildQuery = (base, includeBatch = true) => {
+    const params = [];
+    if (includeBatch && selectedBatch) params.push(`batchId=${selectedBatch}`);
+    if (period) {
+      params.push(`period=${period}`);
+    } else {
+      if (year) params.push(`year=${year}`);
+      if (month) params.push(`month=${month}`);
+    }
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return `${base}${qs}`;
+  };
+
   // Fetch attendance and summary
   const fetchAttendance = async () => {
-    if (!year && !month && selectedBatch) {
-      alert("Please select at least a Year or a Month to filter attendance.");
+    // Only enforce Y/M when NO quick range is selected
+    if (!period && !year && !month && selectedBatch) {
+      alert("Select a Year/Month or choose a Quick Range (3m/6m).");
       return;
     }
 
     setLoading(true);
     setError("");
     try {
-      let url = `${API_BASE}/admin/attendance?`;
-      if (selectedBatch) url += `batchId=${selectedBatch}`;
-      if (year) url += `&year=${year}`;
-      if (month) url += `&month=${month}`;
-
-      const res = await axios.get(url, {
+      const listUrl = buildQuery(`${API_BASE}/admin/attendance`);
+      const res = await axios.get(listUrl, {
         headers: { Authorization: `Bearer ${token}` },
       });
       setAttendance(res.data || []);
 
-      // Summary
-      let summaryUrl = `${API_BASE}/reports/summary?`;
-      if (selectedBatch) summaryUrl += `batchId=${selectedBatch}`;
-      if (year) summaryUrl += `&year=${year}`;
-      if (month) summaryUrl += `&month=${month}`;
-
+      const summaryUrl = buildQuery(`${API_BASE}/reports/summary`);
       const summaryRes = await axios.get(summaryUrl, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -136,15 +148,11 @@ const AdminDashboard = () => {
     navigate("/login");
   };
 
-  // Export Excel (unchanged)
+  // Export Excel (respects quick range OR year/month)
   const exportExcel = async () => {
     if (!selectedBatch) return alert("Select a batch first!");
-
     try {
-      let url = `${API_BASE}/reports/export?batchId=${selectedBatch}`;
-      if (year) url += `&year=${year}`;
-      if (month) url += `&month=${month}`;
-
+      const url = buildQuery(`${API_BASE}/reports/export`);
       const res = await axios.get(url, {
         headers: { Authorization: `Bearer ${token}` },
         responseType: "blob",
@@ -215,7 +223,6 @@ const AdminDashboard = () => {
 
     return groups;
   }, [attendance]);
-
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100">
@@ -359,6 +366,22 @@ const AdminDashboard = () => {
         {/* Filters & Actions */}
         <div className="bg-white/70 backdrop-blur-sm rounded-2xl p-5 sm:p-6 shadow-lg border border-white/50 mb-8">
           <div className="flex flex-wrap gap-4 items-end">
+            {/* ✅ Quick Range add-on */}
+            <div className="min-w-40">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                Quick Range
+              </label>
+              <select
+                value={period}
+                onChange={(e) => setPeriod(e.target.value)}
+                className="w-full px-4 py-3 bg-white/80 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-100 focus:border-blue-400 transition-all duration-200"
+              >
+                <option value="">None</option>
+                <option value="3m">Last 3 months</option>
+                <option value="6m">Last 6 months</option>
+              </select>
+            </div>
+
             <div className="flex-1 min-w-32">
               <label className="block text-sm font-semibold text-gray-700 mb-2">
                 Year
@@ -368,7 +391,10 @@ const AdminDashboard = () => {
                 placeholder="2025"
                 value={year}
                 onChange={(e) => setYear(e.target.value)}
-                className="w-full px-4 py-3 bg-white/80 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-100 focus:border-blue-400 transition-all duration-200"
+                disabled={!!period}
+                className={`w-full px-4 py-3 bg-white/80 border-2 rounded-xl focus:ring-4 focus:ring-blue-100 transition-all duration-200 ${
+                  period ? "border-gray-200 opacity-70 cursor-not-allowed" : "border-gray-200 focus:border-blue-400"
+                }`}
               />
             </div>
 
@@ -379,14 +405,15 @@ const AdminDashboard = () => {
               <select
                 value={month}
                 onChange={(e) => setMonth(e.target.value)}
-                className="w-full px-4 py-3 bg-white/80 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-100 focus:border-blue-400 transition-all duration-200"
+                disabled={!!period}
+                className={`w-full px-4 py-3 bg-white/80 border-2 rounded-xl focus:ring-4 focus:ring-blue-100 transition-all duration-200 ${
+                  period ? "border-gray-200 opacity-70 cursor-not-allowed" : "border-gray-200 focus:border-blue-400"
+                }`}
               >
                 <option value="">All Months</option>
-                {[...Array(12)].map((_, i) => (
+                {[...Array(12)].fill(null).map((_, i) => (
                   <option key={i + 1} value={i + 1}>
-                    {new Date(0, i).toLocaleString("default", {
-                      month: "long",
-                    })}
+                    {new Date(0, i).toLocaleString("default", { month: "long" })}
                   </option>
                 ))}
               </select>
