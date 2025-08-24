@@ -188,33 +188,48 @@ const Reports = () => {
   // ---------- Build chart data: Present + Absent counts per student ----------
   const chartData = useMemo(() => {
     if (!attendance.length) return [];
-    const map = new Map();
+
+    // helper accessors
+    const getId = (rec) =>
+      rec?.student?._id ??
+      rec?.studentId ??
+      rec?.student_id ??
+      null;
+
+    const getName = (rec) =>
+      rec?.student?.name ??
+      rec?.studentName ??
+      rec?.student_name ??
+      "";
+
+    // aggregate by stable studentId; skip deleted/missing students
+    const byStudent = new Map();
 
     for (const rec of attendance) {
-      const name =
-        rec?.student?.name ||
-        rec?.studentName ||
-        rec?.student_name ||
-        "Unknown";
+      const studentId = getId(rec);
+      if (!studentId) continue; // skip "Unknown" (deleted) rows
 
+      const name = getName(rec) || "Unnamed";
       const status = String(rec?.status || "").toLowerCase();
-      if (!map.has(name)) map.set(name, { present: 0, absent: 0, total: 0 });
 
-      // Only count Present/Absent toward % so bars sum to 100
+      if (!byStudent.has(studentId)) {
+        byStudent.set(studentId, { name, present: 0, absent: 0, total: 0 });
+      }
+
       if (status === "present" || status === "absent") {
-        const o = map.get(name);
+        const o = byStudent.get(studentId);
         o.total += 1;
         if (status === "present") o.present += 1;
         else o.absent += 1;
       }
     }
 
-    return Array.from(map.entries()).map(([name, v]) => {
+    return Array.from(byStudent.values()).map((v) => {
       const total = v.total || 0;
       const presentPct = total ? Math.round((v.present / total) * 100) : 0;
       const absentPct = 100 - presentPct;
       return {
-        name,
+        name: v.name,
         presentPct,
         absentPct,
         presentCount: v.present,
@@ -223,7 +238,6 @@ const Reports = () => {
       };
     });
   }, [attendance]);
-
 
   // ---------- UI ----------
   if (loadingInit) {
@@ -439,8 +453,6 @@ const Reports = () => {
                   <Bar dataKey="absentPct" name="Absent %" fill="#EF4444" radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
-
-
             </div>
           )}
         </div>

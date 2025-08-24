@@ -7,13 +7,13 @@ export const register = async (req, res) => {
   const { name, email, password, role, city } = req.body;
 
   try {
-    const passwordHash = await bcrypt.hash(password, 10);
+    // const passwordHash = await bcrypt.hash(password, 10);
 
     let user;
     if (role === "admin") {
-      user = await Admin.create({ name, email, passwordHash });
+      user = await Admin.create({ name, email, password });
     } else if (role === "teacher") {
-      user = await Teacher.create({ name, email, passwordHash, city });
+      user = await Teacher.create({ name, email, password, city });
     } else {
       return res.status(400).json({ message: "Invalid role" });
     }

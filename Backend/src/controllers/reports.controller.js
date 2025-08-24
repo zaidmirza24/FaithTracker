@@ -1,3 +1,4 @@
+// src/controllers/reports.controller.js
 import { getFilteredAttendance, getAttendanceSummary } from "../services/attendanceService.js";
 import ExcelJS from "exceljs";
 
@@ -8,27 +9,46 @@ export const attendanceSummary = async (req, res) => {
 
     if (!records.length) return res.json({ message: "No attendance records found" });
 
-    const summary = getAttendanceSummary(records); 
+    const summary = getAttendanceSummary(records);
     res.json(summary);
   } catch (err) {
     res.status(500).json({ message: "Failed to fetch attendance summary", error: err.message });
   }
 };
 
-// import ExcelJS from "exceljs";
-// import { getFilteredAttendance } from "../services/attendance.service.js";
+// ----------------------------
+// Helpers
+// ----------------------------
+const TZ_OFFSET_MIN = 330; // Asia/Kolkata
+const TZ_OFFSET_MS = TZ_OFFSET_MIN * 60 * 1000;
 
+const localDateKey = (value) => {
+  const d = new Date(value);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
+const getId = (ref) =>
+  ref && typeof ref === "object"
+    ? ref._id?.toString?.() || ""
+    : ref?.toString?.() || "";
+
+const getName = (ref) =>
+  ref && typeof ref === "object" ? (ref.name || "") : "";
+
+// ----------------------------
+// Export Excel (robust)
+// ----------------------------
 export const exportAttendanceExcel = async (req, res) => {
   try {
     const { year, month, period } = req.query;
 
     // 1) Fetch records first
-    const records = await getFilteredAttendance(req.query);
+    let records = await getFilteredAttendance(req.query);
 
-    // 2) Compute date range
-    const TZ_OFFSET_MIN = 330; // Asia/Kolkata
-    const TZ_OFFSET_MS = TZ_OFFSET_MIN * 60 * 1000;
-
+    // 2) Compute date range (IST-aware boundaries)
     let start = null, end = null;
 
     const now = new Date();
@@ -38,11 +58,11 @@ export const exportAttendanceExcel = async (req, res) => {
     if (period === "3m" || period === "6m") {
       const months = period === "3m" ? 3 : 6;
 
-      // end = first day of next month (local IST)
+      // end = first day of next month (IST)
       const endUTC = Date.UTC(yNow, mNow + 1, 1, 0, 0, 0, 0);
       end = new Date(endUTC - TZ_OFFSET_MS);
 
-      // start = first day of (currentMonth - (months - 1))
+      // start = first day of (currentMonth - (months - 1)) (IST)
       const anchor = new Date(Date.UTC(yNow, mNow, 1, 0, 0, 0, 0));
       anchor.setMonth(anchor.getMonth() - (months - 1));
       start = new Date(anchor.getTime() - TZ_OFFSET_MS);
@@ -68,56 +88,60 @@ export const exportAttendanceExcel = async (req, res) => {
     }
 
     // 3) Apply range filter
-    let filteredRecords = records;
     if (start && end) {
       const startMs = start.getTime();
       const endMs = end.getTime();
-      filteredRecords = records.filter(r => {
+      records = records.filter(r => {
         const t = new Date(r.date).getTime();
         return t >= startMs && t < endMs;
       });
     }
 
+    // 4) Drop rows with missing student/batch to avoid null crashes
+    const before = records.length;
+    const filteredRecords = records.filter(r => r?.student && r?.batch);
+    const removed = before - filteredRecords.length;
     if (!filteredRecords.length) {
       return res.status(404).json({ message: "No records to export" });
     }
+    if (removed > 0) {
+      console.warn(`exportAttendanceExcel: skipped ${removed} records with missing student/batch`);
+    }
 
-    // 4) ExcelJS workbook
+    // 5) Prepare Excel
     const workbook = new ExcelJS.Workbook();
 
-    // Batch name
+    // Derive a batch name for the sheet/file
     let batchName = "Attendance";
-    if (filteredRecords[0].batch?.name) {
-      batchName = filteredRecords[0].batch.name.trim().replace(/\s+/g, "_");
-    } else if (filteredRecords[0].batchName) {
-      batchName = filteredRecords[0].batchName.trim().replace(/\s+/g, "_");
-    } else if (filteredRecords[0].batch_name) {
-      batchName = filteredRecords[0].batch_name.trim().replace(/\s+/g, "_");
-    } else if (filteredRecords[0].class?.name) {
-      batchName = filteredRecords[0].class.name.trim().replace(/\s+/g, "_");
-    } else if (filteredRecords[0].className) {
-      batchName = filteredRecords[0].className.trim().replace(/\s+/g, "_");
+    const first = filteredRecords[0];
+    if (first.batch?.name) {
+      batchName = first.batch.name.trim().replace(/\s+/g, "_");
+    } else if (first.batchName) {
+      batchName = first.batchName.trim().replace(/\s+/g, "_");
+    } else if (first.batch_name) {
+      batchName = first.batch_name.trim().replace(/\s+/g, "_");
+    } else if (first.class?.name) {
+      batchName = first.class.name.trim().replace(/\s+/g, "_");
+    } else if (first.className) {
+      batchName = first.className.trim().replace(/\s+/g, "_");
     }
 
     const sheet = workbook.addWorksheet(batchName);
 
-    const localDateKey = (value) => {
-      const d = new Date(value);
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, "0");
-      const day = String(d.getDate()).padStart(2, "0");
-      return `${y}-${m}-${day}`;
-    };
-
-    // Unique dates
+    // Unique dates (as YYYY-MM-DD)
     const dates = [...new Set(filteredRecords.map(r => localDateKey(r.date)))].sort();
 
-    // Unique students
-    const students = [
-      ...new Map(filteredRecords.map(r => [r.student._id.toString(), r.student.name])).entries()
-    ];
+    // Unique students: [ [id, name], ... ]
+    const studentMap = new Map();
+    for (const r of filteredRecords) {
+      const sid = getId(r.student);
+      if (!sid) continue;
+      const sname = getName(r.student);
+      if (!studentMap.has(sid)) studentMap.set(sid, sname);
+    }
+    const students = [...studentMap.entries()];
 
-    // Month groups
+    // Group date headers by Month for a merged top row
     const monthGroups = [];
     let startIdx = 0;
     while (startIdx < dates.length) {
@@ -141,12 +165,14 @@ export const exportAttendanceExcel = async (req, res) => {
     const monthHeaderRow = sheet.addRow(["Student Name", ...dates.map(() => "")]);
     const headerRow = sheet.addRow(["Student Name", ...dates]);
     headerRow.font = { bold: true };
+
+    // Merge the "Student Name" header across the two top rows
     sheet.mergeCells(1, 1, 2, 1);
     const nameHeaderCell = sheet.getCell(1, 1);
     nameHeaderCell.value = "Student Name";
     nameHeaderCell.alignment = { vertical: "middle", horizontal: "center" };
 
-    // Merge month blocks
+    // Merge month blocks in the first row
     monthGroups.forEach(({ label, start, end }) => {
       const startCol = 2 + start;
       const endCol = 2 + end;
@@ -163,22 +189,24 @@ export const exportAttendanceExcel = async (req, res) => {
     });
 
     // Data rows
-    students.forEach(([studentId, studentName]) => {
+    for (const [studentId, studentName] of students) {
       const row = [studentName];
-      dates.forEach((dateKey) => {
+      for (const dateKey of dates) {
         const rec = filteredRecords.find(
-          (r) =>
-            r.student._id.toString() === studentId &&
-            localDateKey(r.date) === dateKey
+          (r) => getId(r.student) === studentId && localDateKey(r.date) === dateKey
         );
-        row.push(rec ? `${rec.status}${rec.remarks ? ` (${rec.remarks})` : ""}` : "");
-      });
+        const cellText = rec
+          ? `${rec.status ?? ""}${rec.remarks ? ` (${rec.remarks})` : ""}`
+          : "";
+        row.push(cellText);
+      }
       sheet.addRow(row);
-    });
+    }
 
-    sheet.columns = headerRow.values.map(() => ({ width: 20 }));
+    // Column widths
+    sheet.columns = Array(headerRow.cellCount).fill({ width: 20 });
 
-    // Styles
+    // Styles: center, zebra on data rows
     sheet.eachRow((row, rowNumber) => {
       row.alignment = { vertical: "middle", horizontal: "center" };
       if (rowNumber >= 3) {
@@ -190,6 +218,7 @@ export const exportAttendanceExcel = async (req, res) => {
       }
     });
 
+    // Borders
     sheet.eachRow((row) => {
       row.eachCell((cell) => {
         cell.border = {
@@ -201,6 +230,7 @@ export const exportAttendanceExcel = async (req, res) => {
       });
     });
 
+    // Thick border at the start of each month group
     monthGroups.forEach(({ start }) => {
       const startCol = 2 + start;
       for (let r = 1; r <= sheet.rowCount; r++) {
@@ -209,6 +239,7 @@ export const exportAttendanceExcel = async (req, res) => {
       }
     });
 
+    // Status highlighting
     const firstDataRow = 3;
     const lastCol = 1 + dates.length;
     for (let r = firstDataRow; r <= sheet.rowCount; r++) {
@@ -249,7 +280,7 @@ export const exportAttendanceExcel = async (req, res) => {
       }
     }
 
-    // Headers
+    // Response headers
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
     res.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
@@ -264,5 +295,3 @@ export const exportAttendanceExcel = async (req, res) => {
     res.status(500).json({ message: "Failed to export Excel", error: err.message });
   }
 };
-
-
