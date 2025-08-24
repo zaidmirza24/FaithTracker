@@ -1,4 +1,4 @@
-import bcrypt from "bcrypt";
+// import bcrypt from "bcrypt";
 import Teacher from "../models/Teachers.js";
 import Batch from "../models/Batch.js";
 import Attendance from "../models/Attendance.js";
@@ -154,7 +154,7 @@ export const createTeacher = async (req, res) => {
     const teacher = await Teacher.create({
       name,
       email,
-      password,
+      passwordHash,
       city,
     });
 

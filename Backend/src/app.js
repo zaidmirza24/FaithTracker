@@ -12,13 +12,7 @@ const app = express();
 
 // Middleware
 app.use(express.json());
-const allowed = process.env.CLIENT_ORIGIN?.split(","); // allow multiple, comma-separated
-// Allow only your frontend
-// app.use(cors({
-//   origin: ["https://faith-tracker.onrender.com","http://localhost:5173"],
-//   methods: ["GET", "POST", "PUT", "DELETE"],
-//   credentials: true
-// }));
+
 
 // If you want to allow multiple origins:
 // app.use(cors({
