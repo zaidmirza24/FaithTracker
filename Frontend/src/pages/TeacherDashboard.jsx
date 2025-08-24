@@ -3,6 +3,7 @@ import { getBatches } from "../services/teacherService";
 import AddBatchForm from "../components/AddBatchForm";
 import BatchList from "../components/BatchList";
 import { BookOpen, Users, TrendingUp, LogOut } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 const TeacherDashboard = () => {
   const [batches, setBatches] = useState([]);
@@ -11,6 +12,7 @@ const TeacherDashboard = () => {
 
   const token = localStorage.getItem("token");
   const user = JSON.parse(localStorage.getItem("user"));
+  const navigate = useNavigate()
 
   useEffect(() => {
     const fetchBatches = async () => {
@@ -38,7 +40,7 @@ const TeacherDashboard = () => {
   const handleLogout = () => {
     localStorage.removeItem("token");
     localStorage.removeItem("user");
-    window.location.href = "/login";
+    navigate("/login");
   };
 
   if (loading) {

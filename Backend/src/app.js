@@ -23,7 +23,7 @@ app.use(cors({
 // If you want to allow multiple origins:
 const allowedOrigins = [
   "https://faith-tracker.onrender.com",
-  "http://localhost:3000" // for local testing
+  "http://localhost:5000" // for local testing
 ];
 
 app.use(cors({
