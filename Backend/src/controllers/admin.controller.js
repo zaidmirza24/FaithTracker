@@ -154,7 +154,7 @@ export const createTeacher = async (req, res) => {
     const teacher = await Teacher.create({
       name,
       email,
-      passwordHash,
+      password,
       city,
     });
 
