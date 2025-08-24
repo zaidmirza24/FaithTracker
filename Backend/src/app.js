@@ -21,21 +21,9 @@ app.use(cors({
 }));
 
 // If you want to allow multiple origins:
-const allowedOrigins = [
-  "https://faith-tracker.onrender.com",
-  "http://localhost:5173" // for local testing
-];
-
 app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error("Not allowed by CORS"));
-    }
-  },
-  credentials: true
-}));
+  origin:"https://faith-tracker.onrender.com"
+}))
 
 app.use(helmet());
 app.use(morgan("dev"));
