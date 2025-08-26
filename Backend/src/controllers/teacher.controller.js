@@ -155,6 +155,15 @@ export const markAttendance = async (req, res) => {
             );
           }
 
+          // NEW: snapshot student name (optional field) for display after deletions
+          let studentName = "";
+          try {
+            const stu = await Student.findById(r.studentId).select("name").lean();
+            if (stu?.name) studentName = stu.name;
+          } catch (_) {
+            // ignore lookup errors; keep empty snapshot
+          }
+
           // Explicit upsert: set fixed fields on insert, status each time
           const updated = await Attendance.findOneAndUpdate(
             { student: r.studentId, batch: batchId, date: attendanceDate },
@@ -162,6 +171,7 @@ export const markAttendance = async (req, res) => {
               $set: {
                 status: normalizedStatus,
                 remarks: r.remarks || "",
+                studentName, // <-- only addition; safe if schema has optional field
               },
               $setOnInsert: {
                 student: r.studentId,
@@ -206,6 +216,7 @@ export const markAttendance = async (req, res) => {
     });
   }
 };
+
 
 
 

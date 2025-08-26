@@ -12,18 +12,16 @@ const AttendanceHistory = () => {
   const currentYear = new Date().getFullYear().toString();
   const [year, setYear] = useState(currentYear);
   const [month, setMonth] = useState("");
-  const [period, setPeriod] = useState(""); // ✅ new quick range ("" | "3m" | "6m")
+  const [period, setPeriod] = useState("");
 
   const token = localStorage.getItem("token");
 
-  // Build safe params
   const buildFilterParams = () => {
     const params = {};
     if (period) {
-      params.period = period; // quick range takes priority
+      params.period = period;
       return params;
     }
-
     const y = typeof year === "string" ? year.trim() : year;
     if (y && /^\d{4}$/.test(String(y))) params.year = String(y);
 
@@ -54,13 +52,11 @@ const AttendanceHistory = () => {
     }
   };
 
-  // Initial fetch
   useEffect(() => {
     fetchHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchId]);
 
-  // Refetch on filter change
   useEffect(() => {
     if (!batchId) return;
     const t = setTimeout(() => fetchHistory(), 300);
@@ -101,7 +97,9 @@ const AttendanceHistory = () => {
       }
 
       const blob = new Blob([res.data], {
-        type: res.headers["content-type"] || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type:
+          res.headers["content-type"] ||
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       });
 
       const link = document.createElement("a");
@@ -117,6 +115,7 @@ const AttendanceHistory = () => {
     }
   };
 
+  // (kept) Old groupedByMonth (unused below, left intact to avoid touching logic)
   const groupedByMonth = useMemo(() => {
     const sorted = [...records].sort((a, b) => new Date(a.date) - new Date(b.date));
     const groups = [];
@@ -132,6 +131,73 @@ const AttendanceHistory = () => {
       map[key].items.push(rec);
     }
     return groups;
+  }, [records]);
+
+  // --- NEW: display name helper with deleted tag ---
+  const getStudentDisplayName = (rec) => {
+    const populatedName = rec?.student?.name;
+    const snapName =
+      rec?.studentName ||
+      rec?.student_name ||
+      rec?.studentNameSnapshot ||
+      rec?.student_name_snapshot;
+
+    if (populatedName) return populatedName;             // active student
+    if (snapName) return `${snapName} (deleted)`;        // deleted but snapshot known
+    return "Unknown (deleted)";                          // fallback
+  };
+
+  // --- NEW: Group by MONTH -> DATE (DESC so current month/dates on top) ---
+  const groupedByMonthAndDate = useMemo(() => {
+    // newest first
+    const sorted = [...records].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    const monthMap = new Map();
+    for (const rec of sorted) {
+      const d = new Date(rec.date);
+
+      const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const monthLabel = d.toLocaleString("default", { month: "long", year: "numeric" });
+
+      if (!monthMap.has(monthKey)) {
+        monthMap.set(monthKey, { key: monthKey, label: monthLabel, dateMap: new Map() });
+      }
+      const monthObj = monthMap.get(monthKey);
+
+      const dateKey = d.toISOString().slice(0, 10); // YYYY-MM-DD
+      const dateLabel = d.toLocaleDateString("en-US", {
+        weekday: "short",
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      });
+
+      if (!monthObj.dateMap.has(dateKey)) {
+        monthObj.dateMap.set(dateKey, { key: dateKey, label: dateLabel, items: [] });
+      }
+      monthObj.dateMap.get(dateKey).items.push(rec);
+    }
+
+    const months = [];
+    for (const { key, label, dateMap } of monthMap.values()) {
+      const dateGroups = Array.from(dateMap.values());
+      // keep DESC by date
+      dateGroups.sort((a, b) => new Date(b.key) - new Date(a.key));
+
+      // per-date totals
+      dateGroups.forEach((g) => {
+        const totals = { Present: 0, Absent: 0, Late: 0, Excused: 0 };
+        g.items.forEach((it) => {
+          if (totals[it.status] !== undefined) totals[it.status] += 1;
+        });
+        g.totals = totals;
+        g.count = g.items.length;
+      });
+
+      months.push({ key, label, dateGroups });
+    }
+
+    return months;
   }, [records]);
 
   if (loading) {
@@ -158,7 +224,7 @@ const AttendanceHistory = () => {
 
           {/* Filters */}
           <div className="flex flex-wrap gap-3">
-            {/* ✅ Quick Range */}
+            {/* Quick Range */}
             <div className="flex flex-col">
               <label className="text-sm font-semibold text-gray-700 mb-2">
                 <span className="inline-flex items-center">
@@ -294,48 +360,73 @@ const AttendanceHistory = () => {
                     </th>
                   </tr>
                 </thead>
+
+                {/* Month header → Date header w/ totals → Rows */}
                 <tbody className="divide-y divide-gray-200">
-                  {groupedByMonth.map((group) => (
-                    <React.Fragment key={group.key}>
+                  {groupedByMonthAndDate.map((month) => (
+                    <React.Fragment key={month.key}>
+                      {/* Month header row */}
                       <tr>
                         <td
                           colSpan={4}
-                          className="px-6 py-3 bg-slate-100/80 text-slate-800 font-semibold border-y border-slate-200"
+                          className="px-6 py-3 bg-slate-200 text-slate-900 font-semibold border-y border-slate-200 text-lg"
                         >
-                          <div className="flex items-center justify-between">
-                            <span>{group.label}</span>
-                            <span className="text-xs text-slate-500">
-                              {group.items.length} record{group.items.length !== 1 ? "s" : ""}
-                            </span>
-                          </div>
+                          {month.label}
                         </td>
                       </tr>
-                      {group.items.map((rec) => (
-                        <tr key={rec._id} className="hover:bg-white/60 transition-colors duration-150">
-                          <td className="px-6 py-4 text-sm text-gray-800">
-                            {new Date(rec.date).toLocaleDateString("en-US", {
-                              weekday: "short",
-                              year: "numeric",
-                              month: "short",
-                              day: "numeric",
-                            })}
-                          </td>
-                          <td className="px-6 py-4 text-sm font-medium text-gray-900">
-                            {rec.student?.name || "—"}
-                          </td>
-                          <td className="px-6 py-4 text-sm">
-                            <span
-                              className={`inline-flex px-3 py-1 text-xs font-semibold rounded-full border ${getStatusBadge(
-                                rec.status
-                              )}`}
+
+                      {month.dateGroups.map((dg) => (
+                        <React.Fragment key={dg.key}>
+                          {/* Date header with totals */}
+                          <tr>
+                            <td
+                              colSpan={4}
+                              className="px-6 py-2 bg-slate-50 text-slate-800 border-y border-slate-200"
                             >
-                              {rec.status}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 text-sm text-gray-600">
-                            {rec.remarks || "—"}
-                          </td>
-                        </tr>
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <span className="font-medium">{dg.label}</span>
+                                <div className="flex gap-2 text-xs">
+                                  <span className="px-2 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                    Present: {dg.totals.Present}
+                                  </span>
+                                  <span className="px-2 py-1 rounded-full bg-red-100 text-red-800 border border-red-200">
+                                    Absent: {dg.totals.Absent}
+                                  </span>
+                                  <span className="px-2 py-1 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+                                    Late: {dg.totals.Late}
+                                  </span>
+                                  {dg.totals.Excused > 0 && (
+                                    <span className="px-2 py-1 rounded-full bg-sky-100 text-sky-800 border border-sky-200">
+                                      Excused: {dg.totals.Excused}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+
+                          {/* Rows for this date */}
+                          {dg.items.map((rec) => (
+                            <tr key={rec._id} className="hover:bg-white/60 transition-colors duration-150">
+                              <td className="px-6 py-4 text-sm text-gray-500">—</td>
+                              <td className="px-6 py-4 text-sm font-medium text-gray-900">
+                                {getStudentDisplayName(rec)}
+                              </td>
+                              <td className="px-6 py-4 text-sm">
+                                <span
+                                  className={`inline-flex px-3 py-1 text-xs font-semibold rounded-full border ${getStatusBadge(
+                                    rec.status
+                                  )}`}
+                                >
+                                  {rec.status}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4 text-sm text-gray-600">
+                                {rec.remarks || "—"}
+                              </td>
+                            </tr>
+                          ))}
+                        </React.Fragment>
                       ))}
                     </React.Fragment>
                   ))}

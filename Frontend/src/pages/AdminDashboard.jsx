@@ -37,6 +37,13 @@ const AdminDashboard = () => {
   const navigate = useNavigate();
   const token = localStorage.getItem("token");
 
+  // --- Helper to display student names, including deleted ---
+  const getStudentDisplayName = (rec) => {
+    if (rec?.student?.name) return rec.student.name;            // active & populated
+    if (rec?.studentName)   return `${rec.studentName} (deleted)`; // snapshot saved on attendance
+    return "Unknown (deleted)";                                  // no snapshot available
+  };
+
   // Fetch cities
   useEffect(() => {
     const fetchCities = async () => {
@@ -200,28 +207,57 @@ const AdminDashboard = () => {
     }
   };
 
-  const groupedByMonth = useMemo(() => {
-    // sort so months appear in chronological order
-    const sorted = [...attendance].sort(
-      (a, b) => new Date(a.date) - new Date(b.date)
-    );
+  // --- NEW: Group by MONTH -> DATE (sorted newest → oldest so current is on top) ---
+  const groupedByMonthAndDate = useMemo(() => {
+    // newest first
+    const sorted = [...attendance].sort((a, b) => new Date(b.date) - new Date(a.date));
 
-    const groups = [];
-    const map = {};
-
+    const monthMap = new Map();
     for (const rec of sorted) {
       const d = new Date(rec.date);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      const label = d.toLocaleString("default", { month: "long", year: "numeric" });
 
-      if (!map[key]) {
-        map[key] = { key, label, items: [] };
-        groups.push(map[key]);
+      const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const monthLabel = d.toLocaleString("default", { month: "long", year: "numeric" });
+
+      if (!monthMap.has(monthKey)) {
+        monthMap.set(monthKey, { key: monthKey, label: monthLabel, dateMap: new Map() });
       }
-      map[key].items.push(rec);
+      const monthObj = monthMap.get(monthKey);
+
+      const dateKey = d.toISOString().slice(0, 10); // YYYY-MM-DD
+      const dateLabel = d.toLocaleDateString("en-US", {
+        weekday: "short",
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      });
+
+      if (!monthObj.dateMap.has(dateKey)) {
+        monthObj.dateMap.set(dateKey, { key: dateKey, label: dateLabel, items: [] });
+      }
+      monthObj.dateMap.get(dateKey).items.push(rec);
     }
 
-    return groups;
+    const months = [];
+    for (const { key, label, dateMap } of monthMap.values()) {
+      const dateGroups = Array.from(dateMap.values());
+      // keep DESC by date
+      dateGroups.sort((a, b) => new Date(b.key) - new Date(a.key));
+
+      // per-date totals
+      dateGroups.forEach((g) => {
+        const totals = { Present: 0, Absent: 0, Late: 0, Excused: 0 };
+        g.items.forEach((it) => {
+          if (totals[it.status] !== undefined) totals[it.status] += 1;
+        });
+        g.totals = totals;
+        g.count = g.items.length;
+      });
+
+      months.push({ key, label, dateGroups });
+    }
+
+    return months;
   }, [attendance]);
 
   return (
@@ -491,54 +527,77 @@ const AdminDashboard = () => {
                       </th>
                     </tr>
                   </thead>
+
+                  {/* --- NEW BODY RENDERING: Month header → Date sections → Rows --- */}
                   <tbody className="divide-y divide-gray-200">
-                    {groupedByMonth.map((group) => (
-                      <React.Fragment key={group.key}>
-                        {/* Month separator row */}
+                    {groupedByMonthAndDate.map((month) => (
+                      <React.Fragment key={month.key}>
+                        {/* Month header row */}
                         <tr>
                           <td
                             colSpan={4}
-                            className="px-6 py-3 bg-slate-100/80 text-slate-800 font-semibold border-y border-slate-200"
+                            className="px-6 py-3 bg-slate-200 text-slate-900 font-semibold border-y border-slate-200 text-lg"
                           >
-                            <div className="flex items-center justify-between">
-                              <span>{group.label}</span>
-                              <span className="text-xs text-slate-500">{group.items.length} record{group.items.length !== 1 ? "s" : ""}</span>
-                            </div>
+                            {month.label}
                           </td>
                         </tr>
 
-                        {/* Rows for this month */}
-                        {group.items.map((rec) => (
-                          <tr key={rec._id} className="hover:bg-white/50 transition-colors duration-150">
-                            <td className="px-6 py-4 text-sm text-gray-800">
-                              {new Date(rec.date).toLocaleDateString("en-US", {
-                                weekday: "short",
-                                year: "numeric",
-                                month: "short",
-                                day: "numeric",
-                              })}
-                            </td>
-                            <td className="px-6 py-4 text-sm font-medium text-gray-900">
-                              {rec?.student?.name ?? rec?.studentName ?? "Deleted Student"}
-                            </td>
-                            <td className="px-6 py-4 text-sm">
-                              <span
-                                className={`inline-flex px-3 py-1 text-xs font-semibold rounded-full border ${getStatusColor(
-                                  rec.status
-                                )}`}
+                        {month.dateGroups.map((dg) => (
+                          <React.Fragment key={dg.key}>
+                            {/* Date header with totals */}
+                            <tr>
+                              <td
+                                colSpan={4}
+                                className="px-6 py-2 bg-slate-50 text-slate-800 border-y border-slate-200"
                               >
-                                {rec.status}
-                              </span>
-                            </td>
-                            <td className="px-6 py-4 text-sm text-gray-600">
-                              {rec.remarks || "-"}
-                            </td>
-                          </tr>
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <span className="font-medium">{dg.label}</span>
+                                  <div className="flex gap-2 text-xs">
+                                    <span className="px-2 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                      Present: {dg.totals.Present}
+                                    </span>
+                                    <span className="px-2 py-1 rounded-full bg-red-100 text-red-800 border border-red-200">
+                                      Absent: {dg.totals.Absent}
+                                    </span>
+                                    <span className="px-2 py-1 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+                                      Late: {dg.totals.Late}
+                                    </span>
+                                    {dg.totals.Excused > 0 && (
+                                      <span className="px-2 py-1 rounded-full bg-sky-100 text-sky-800 border border-sky-200">
+                                        Excused: {dg.totals.Excused}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+
+                            {/* Rows for this date */}
+                            {dg.items.map((rec) => (
+                              <tr key={rec._id} className="hover:bg-white/50 transition-colors duration-150">
+                                <td className="px-6 py-4 text-sm text-gray-500"></td>
+                                <td className="px-6 py-4 text-sm font-medium text-gray-900">
+                                  {getStudentDisplayName(rec)}
+                                </td>
+                                <td className="px-6 py-4 text-sm">
+                                  <span
+                                    className={`inline-flex px-3 py-1 text-xs font-semibold rounded-full border ${getStatusColor(
+                                      rec.status
+                                    )}`}
+                                  >
+                                    {rec.status}
+                                  </span>
+                                </td>
+                                <td className="px-6 py-4 text-sm text-gray-600">
+                                  {rec.remarks || "-"}
+                                </td>
+                              </tr>
+                            ))}
+                          </React.Fragment>
                         ))}
                       </React.Fragment>
                     ))}
                   </tbody>
-
                 </table>
               </div>
             )}

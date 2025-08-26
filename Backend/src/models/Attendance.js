@@ -5,7 +5,8 @@ const attendanceSchema = new mongoose.Schema({
   batch: { type: mongoose.Schema.Types.ObjectId, ref: "Batch", required: true },
   date: { type: Date, default: Date.now },
   status: { type: String, enum: ["Present", "Absent", "Late", "Excused"], required: true },
-  remarks: { type: String }
+  remarks: { type: String },
+  studentName: { type: String, default: "" }
 });
 
 export default mongoose.model("Attendance", attendanceSchema);
