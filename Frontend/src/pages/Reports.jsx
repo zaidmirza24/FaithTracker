@@ -29,10 +29,10 @@ const Reports = () => {
   const [batches, setBatches] = useState([]);
   const [selectedBatch, setSelectedBatch] = useState("");
 
-  // ✅ Add-on quick range ("" | "3m" | "6m")
+  // Quick range ("" | "3m" | "6m")
   const [period, setPeriod] = useState("");
 
-  // Keep your Year/Month as-is (used when period is empty)
+  // Year/Month (used when period is empty)
   const [year, setYear] = useState(new Date().getFullYear().toString());
   const [month, setMonth] = useState(""); // "" = all
 
@@ -129,7 +129,7 @@ const Reports = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTeacher, role]);
 
-  // ---------- Build params consistently ----------
+  // ---------- Build params ----------
   const buildParams = () => {
     const params = {};
     if (period) {
@@ -142,11 +142,11 @@ const Reports = () => {
         if (m >= 1 && m <= 12) params.month = String(m);
       }
     }
-    params._ = Date.now(); // cache buster
+    params._ = String(Date.now()); // cache buster
     return params;
   };
 
-  // ---------- Fetch attendance (role-aware endpoint) ----------
+  // ---------- Fetch attendance ----------
   const fetchAttendance = async () => {
     if (!selectedBatch) return;
     setLoading(true);
@@ -185,58 +185,84 @@ const Reports = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBatch, year, month, period, role]);
 
-  // ---------- Build chart data: Present + Absent counts per student ----------
+  // ---------- Helpers ----------
+  const localDateKey = (value) => {
+    const d = new Date(value);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`; // local YYYY-MM-DD
+  };
+
+  // ---------- Chart data: Present + Absent (Holiday excluded from total %) ----------
   const chartData = useMemo(() => {
     if (!attendance.length) return [];
 
-    // helper accessors
     const getId = (rec) =>
-      rec?.student?._id ??
-      rec?.studentId ??
-      rec?.student_id ??
-      null;
+      rec?.student?._id ?? rec?.studentId ?? rec?.student_id ?? null;
 
     const getName = (rec) =>
-      rec?.student?.name ??
-      rec?.studentName ??
-      rec?.student_name ??
-      "";
+      rec?.student?.name ?? rec?.studentName ?? rec?.student_name ?? "";
 
-    // aggregate by stable studentId; skip deleted/missing students
     const byStudent = new Map();
 
     for (const rec of attendance) {
       const studentId = getId(rec);
-      if (!studentId) continue; // skip "Unknown" (deleted) rows
+      if (!studentId) continue;
 
       const name = getName(rec) || "Unnamed";
       const status = String(rec?.status || "").toLowerCase();
 
       if (!byStudent.has(studentId)) {
-        byStudent.set(studentId, { name, present: 0, absent: 0, total: 0 });
+        byStudent.set(studentId, {
+          name,
+          present: 0,
+          absent: 0,
+          total: 0,
+          holiday: 0,
+        });
       }
 
-      if (status === "present" || status === "absent") {
-        const o = byStudent.get(studentId);
+      const o = byStudent.get(studentId);
+
+      if (status === "present") {
+        o.present += 1;
         o.total += 1;
-        if (status === "present") o.present += 1;
-        else o.absent += 1;
+      } else if (status === "absent") {
+        o.absent += 1;
+        o.total += 1;
+      } else if (status === "holiday") {
+        // holiday does not increase "total" (no class conducted)
+        o.holiday += 1;
       }
     }
 
     return Array.from(byStudent.values()).map((v) => {
       const total = v.total || 0;
       const presentPct = total ? Math.round((v.present / total) * 100) : 0;
-      const absentPct = 100 - presentPct;
+      const absentPct = total ? Math.round((v.absent / total) * 100) : 0;
       return {
         name: v.name,
         presentPct,
         absentPct,
         presentCount: v.present,
         absentCount: v.absent,
+        holidayCount: v.holiday,
         total,
       };
     });
+  }, [attendance]);
+
+  // ---------- Unique holiday days (deduped by date) ----------
+  const uniqueHolidayDays = useMemo(() => {
+    if (!attendance.length) return 0;
+    const holidayDates = new Set();
+    for (const rec of attendance) {
+      if (String(rec?.status || "").toLowerCase() === "holiday") {
+        holidayDates.add(localDateKey(rec.date));
+      }
+    }
+    return holidayDates.size;
   }, [attendance]);
 
   // ---------- UI ----------
@@ -253,14 +279,14 @@ const Reports = () => {
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="mb-6 flex flex-col md:flex-row md:items-end md:justify-between gap-4">
-          <div>
+          <div className="md:mb-16">
             <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
               Reports
             </h1>
             <p className="text-gray-600 mt-1">Present vs Absent per student</p>
           </div>
 
-          {/* Filters */}
+        {/* Filters */}
           <div className="flex flex-wrap gap-3">
             {role !== "teacher" && (
               <>
@@ -333,7 +359,7 @@ const Reports = () => {
               </select>
             </div>
 
-            {/* ✅ Quick Range */}
+            {/* Quick Range */}
             <div className="flex flex-col w-44">
               <label className="text-sm font-semibold text-gray-700 mb-2">
                 Quick Range
@@ -360,8 +386,9 @@ const Reports = () => {
                 value={year}
                 onChange={(e) => setYear(e.target.value)}
                 disabled={!!period}
-                className={`px-4 py-3 bg-white/80 border-2 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none ${period ? "opacity-60 cursor-not-allowed" : "border-gray-200"
-                  }`}
+                className={`px-4 py-3 bg-white/80 border-2 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none ${
+                  period ? "opacity-60 cursor-not-allowed" : "border-gray-200"
+                }`}
               />
             </div>
 
@@ -373,8 +400,9 @@ const Reports = () => {
                 value={month}
                 onChange={(e) => setMonth(e.target.value)}
                 disabled={!!period}
-                className={`px-4 py-3 bg-white/80 border-2 rounded-xl focus:ring-4 focus:ring-purple-100 outline-none ${period ? "opacity-60 cursor-not-allowed" : "border-gray-200"
-                  }`}
+                className={`px-4 py-3 bg-white/80 border-2 rounded-xl focus:ring-4 focus:ring-purple-100 outline-none ${
+                  period ? "opacity-60 cursor-not-allowed" : "border-gray-200"
+                }`}
               >
                 <option value="">All Months</option>
                 {[...Array(12)].map((_, i) => (
@@ -406,6 +434,29 @@ const Reports = () => {
             </div>
           </div>
         )}
+
+        {/* Insights Row */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+          <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/50 p-6">
+            <p className="text-sm font-semibold text-gray-700">Holiday Days</p>
+            <p className="mt-2 text-3xl font-bold text-gray-900">{uniqueHolidayDays}</p>
+            <p className="text-xs text-gray-500 mt-1">
+              Counted once per holiday date in the selected range
+            </p>
+          </div>
+
+          {/* <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/50 p-6">
+            <p className="text-sm font-semibold text-gray-700">Records Loaded</p>
+            <p className="mt-2 text-3xl font-bold text-gray-900">{attendance.length}</p>
+            <p className="text-xs text-gray-500 mt-1">All statuses included</p>
+          </div> */}
+
+          <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/50 p-6">
+            <p className="text-sm font-semibold text-gray-700">Students in Chart</p>
+            <p className="mt-2 text-3xl font-bold text-gray-900">{chartData.length}</p>
+            <p className="text-xs text-gray-500 mt-1">Present/Absent % per student</p>
+          </div>
+        </div>
 
         {/* Chart Card */}
         <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-lg border border-white/50 p-6">
@@ -444,11 +495,10 @@ const Reports = () => {
                     labelFormatter={(_, payload) => {
                       const p = payload?.[0]?.payload;
                       if (!p) return "";
-                      return `${p.name} — ${p.presentCount}/${p.total} present (${p.presentPct}%)`;
+                      return `${p.name} — ${p.presentCount}/${p.total} present (${p.presentPct}%) | Holidays: ${p.holidayCount}`;
                     }}
                   />
                   <Legend />
-                  {/* side-by-side percentage bars */}
                   <Bar dataKey="presentPct" name="Present %" fill="#10B981" radius={[6, 6, 0, 0]} />
                   <Bar dataKey="absentPct" name="Absent %" fill="#EF4444" radius={[6, 6, 0, 0]} />
                 </BarChart>

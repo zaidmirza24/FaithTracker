@@ -14,6 +14,11 @@ const TeacherAttendance = () => {
   const [submitting, setSubmitting] = useState(false);
   const [attendanceExists, setAttendanceExists] = useState(false);
   const [editMode, setEditMode] = useState(false);
+
+  // 🔹 Holiday UI state
+  const [isHoliday, setIsHoliday] = useState(false);
+  const [holidayReason, setHolidayReason] = useState("");
+
   const [selectedDate, setSelectedDate] = useState(() => {
     const d = new Date();
     const yyyy = d.getFullYear();
@@ -51,7 +56,6 @@ const TeacherAttendance = () => {
   const fetchAttendanceForDate = async (roster = students) => {
     const dateParam = formatDateForAPI(selectedDate);
 
-    // Prefer by-date endpoint; fallback to "today"
     const byDateUrl = `${API_BASE}/teacher/attendance/by-date/${batchId}?date=${encodeURIComponent(
       dateParam
     )}`;
@@ -67,14 +71,18 @@ const TeacherAttendance = () => {
         });
         data = fallback?.data || [];
       } else {
-        // If other error, treat as no existing attendance
         data = [];
       }
     }
 
     if (Array.isArray(data) && data.length > 0) {
       setAttendanceExists(true);
-      // hydrate current roster
+
+      // 💡 Detect "Holiday" day and hydrate UI
+      const allHoliday = data.every((r) => String(r.status).toLowerCase() === "holiday");
+      setIsHoliday(allHoliday);
+      setHolidayReason(allHoliday ? (data[0]?.remarks || "Holiday") : "");
+
       const nextAttendance = {};
       const nextRemarks = {};
       roster.forEach((s) => {
@@ -93,9 +101,11 @@ const TeacherAttendance = () => {
       setAttendance(nextAttendance);
       setRemarks(nextRemarks);
     } else {
+      // No attendance yet for this date
       setAttendanceExists(false);
       setEditMode(false);
-      // Ensure defaults aligned with roster
+      setIsHoliday(false);
+      setHolidayReason("");
       mergeStateForRoster(roster, {}, {});
     }
   };
@@ -121,7 +131,6 @@ const TeacherAttendance = () => {
     setLoading(true);
     (async () => {
       try {
-        // Reset defaults for current roster then hydrate from server for that date
         mergeStateForRoster(students, {}, {});
         await fetchAttendanceForDate(students);
       } finally {
@@ -131,16 +140,14 @@ const TeacherAttendance = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate]);
 
-  // Refetch roster when tab regains focus (covers delete→add on other screens)
+  // Refetch roster when tab regains focus
   useEffect(() => {
     const onFocus = async () => {
       if (!batchId) return;
       try {
         const list = await getFreshStudents();
         await fetchAttendanceForDate(list);
-      } catch (e) {
-        // noop
-      }
+      } catch {}
     };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
@@ -168,9 +175,16 @@ const TeacherAttendance = () => {
         remarks: remarks[s._id] || "",
       }));
 
+      // 🔸 send holiday flags (backend will force status=Holiday when true)
       await axios.post(
         `${API_BASE}/teacher/attendance`,
-        { batchId, date: formatDateForAPI(selectedDate), records },
+        {
+          batchId,
+          date: formatDateForAPI(selectedDate),
+          records,
+          isHoliday,         // ✅ NEW
+          holidayReason,     // ✅ NEW
+        },
         { headers }
       );
 
@@ -231,6 +245,34 @@ const TeacherAttendance = () => {
             </div>
           </div>
 
+          {/* 🔹 Holiday controls */}
+          <div className="mb-5 bg-white/60 border border-white/50 rounded-2xl p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <input
+                id="holiday-toggle"
+                type="checkbox"
+                checked={isHoliday}
+                onChange={(e) => setIsHoliday(e.target.checked)}
+                className="w-5 h-5 rounded-md accent-blue-600"
+                disabled={attendanceExists && !editMode}
+              />
+              <label htmlFor="holiday-toggle" className="font-semibold text-gray-800">
+                Mark this day as Holiday
+              </label>
+            </div>
+
+            {isHoliday && (
+              <input
+                type="text"
+                placeholder="Holiday reason (e.g., National Holiday)"
+                value={holidayReason}
+                onChange={(e) => setHolidayReason(e.target.value)}
+                className="w-full md:w-1/2 px-4 py-3 bg-white/80 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-100"
+                disabled={attendanceExists && !editMode}
+              />
+            )}
+          </div>
+
           {/* Edit Button */}
           {attendanceExists && !editMode && (
             <button
@@ -271,7 +313,7 @@ const TeacherAttendance = () => {
                       }))
                     }
                     className="w-full sm:w-44 px-4 py-3 bg-white/80 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-100 disabled:opacity-60 min-w-0"
-                    disabled={attendanceExists && !editMode}
+                    disabled={isHoliday || (attendanceExists && !editMode)}
                   >
                     {STATUS_OPTIONS.map((status) => (
                       <option key={status} value={status}>
@@ -292,7 +334,7 @@ const TeacherAttendance = () => {
                       }))
                     }
                     className="w-full sm:flex-1 px-4 py-3 bg-white/80 border-2 border-gray-200 rounded-xl focus:ring-4 focus:ring-blue-100 disabled:opacity-60 min-w-0"
-                    disabled={attendanceExists && !editMode}
+                    disabled={isHoliday || (attendanceExists && !editMode)}
                   />
                 </div>
               ))}
@@ -312,6 +354,8 @@ const TeacherAttendance = () => {
                     : "Attendance Exists"
                   : submitting
                   ? "Submitting..."
+                  : isHoliday
+                  ? `Save Holiday (${new Date(selectedDate).toLocaleDateString()})`
                   : `Submit Attendance (${new Date(selectedDate).toLocaleDateString()})`}
               </button>
             </div>

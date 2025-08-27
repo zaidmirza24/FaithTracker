@@ -408,7 +408,7 @@ const AttendanceHistory = () => {
                           {/* Rows for this date */}
                           {dg.items.map((rec) => (
                             <tr key={rec._id} className="hover:bg-white/60 transition-colors duration-150">
-                              <td className="px-6 py-4 text-sm text-gray-500">—</td>
+                              <td className="px-6 py-4 text-sm text-gray-500"></td>
                               <td className="px-6 py-4 text-sm font-medium text-gray-900">
                                 {getStudentDisplayName(rec)}
                               </td>
