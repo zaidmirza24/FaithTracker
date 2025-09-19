@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import axios from "axios";
 import { useParams, useNavigate } from "react-router-dom";
 import AddStudent from "./AddStudent";
-import {API_BASE} from "../config/api.js"
+import { API_BASE } from "../config/api.js";
 
 const StudentList = () => {
   const { batchId } = useParams();
@@ -15,7 +15,6 @@ const StudentList = () => {
   const [newName, setNewName] = useState("");
 
   const token = localStorage.getItem("token");
-  // const API_BASE = "http://localhost:5000/api/teacher";
 
   const fetchStudents = async () => {
     if (!batchId) return;
@@ -41,6 +40,7 @@ const StudentList = () => {
 
   useEffect(() => {
     fetchStudents();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchId]);
 
   const handleDelete = async (studentId) => {
@@ -107,6 +107,23 @@ const StudentList = () => {
         >
           View Attendance History
         </button>
+
+        <button
+          onClick={() => navigate(`/teacher/batch/${batchId}/syllabus`)}
+          className="px-5 py-3 rounded-xl shadow-lg bg-gradient-to-r from-emerald-500 to-green-500 text-white font-semibold hover:scale-105 transition-all duration-200"
+        >
+          Update Syllabus
+        </button>
+
+        {/* NEW: View Syllabus (read-only) */}
+        <button
+          onClick={() => navigate(`/teacher/batch/${batchId}/syllabus/history`)}
+          className="px-5 py-3 rounded-xl shadow-lg bg-gradient-to-r from-blue-500 to-indigo-500 text-white font-semibold hover:scale-105 transition-all duration-200"
+        >
+          View Syllabus History
+        </button>
+
+        
       </div>
 
       {/* Add Student Form */}

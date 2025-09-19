@@ -1,6 +1,10 @@
 import React from "react";
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 
+import SyllabusPage from "./pages/SyllabusPage.jsx";
+import SyllabusHistory from "./pages/SyllabusHistory";
+
+
 import Login from "./pages/Login.jsx";
 
 import TeacherDashboard from "./pages/TeacherDashboard";
@@ -105,6 +109,21 @@ function App() {
 
         {/* Fallback */}
         <Route path="*" element={<Login />} />
+      
+        <Route
+          path="/teacher/batch/:batchId/syllabus"
+          element={
+            <PrivateRoute roles={["teacher"]}>
+              <SyllabusPage />
+            </PrivateRoute>
+          }
+        />
+        // Inside your Routes
+        <Route path="/teacher/batch/:batchId/syllabus/history" element={
+          <PrivateRoute roles={["teacher"]}>
+            <SyllabusHistory />
+          </PrivateRoute>
+        } />
       </Routes>
     </Router>
   );

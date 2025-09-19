@@ -10,8 +10,13 @@ import {
   updateStudent,
   deleteStudent,
   getTodayAttendance,
-  getAttendanceHistory
+  getAttendanceHistory,
+  
 } from "../controllers/teacher.controller.js";
+
+import { createOrUpdateSyllabus, getSyllabusByDate } from "../controllers/syllabus.controller.js";
+
+
 
 const router = express.Router();
 
@@ -40,4 +45,16 @@ router.put("/students/:studentId",updateStudent);
 // Delete a student
 router.delete("/students/:studentId", deleteStudent);
 
+// Manage syllabus for a batch (teacher)
+router.post("/batches/:batchId/syllabus", createOrUpdateSyllabus);
+router.get("/batches/:batchId/syllabus", getSyllabusByDate);
+// In routes/teacher.js
+// router.get("/batches/:batchId/syllabus/history", getSyllabusHistory);
+
+
+
+
 export default router;
+
+
+

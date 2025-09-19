@@ -7,11 +7,15 @@ import mongoose from "mongoose";
 const VALID_STATUSES = ["Present", "Absent", "Holiday"]; // ✅ include Holiday
 
 // Create a new batch
+// add at top of file (if not already)
+import { SUBJECT_MAP } from "../config/batchTypeMap.js"; // create this file if not present
+
+// Create a new batch — automatically allocate subjects by batchType if mapping exists
 export const createBatch = async (req, res) => {
   try {
-    const { name } = req.body;
-    const teacherId = req.user.userId;
-    const city = req.user.city;
+    const { name, batchType } = req.body;
+    const teacherId = req.user?.userId;
+    const city = req.user?.city;
 
     if (!teacherId) {
       return res.status(400).json({ message: "Invalid token: teacherId missing" });
@@ -21,12 +25,29 @@ export const createBatch = async (req, res) => {
       return res.status(400).json({ message: "Batch name is required" });
     }
 
-    const batch = await Batch.create({ name, teacher: teacherId, city });
-    res.status(201).json(batch);
+    const batchData = {
+      name: name.trim(),
+      teacher: teacherId,
+      city: city || "",
+      batchType: batchType || null,
+    };
+
+    // Apply mapping if present
+    if (batchType && SUBJECT_MAP && SUBJECT_MAP[batchType]) {
+      // deep clone to avoid shared refs
+      batchData.subjects = JSON.parse(JSON.stringify(SUBJECT_MAP[batchType]));
+    } else {
+      batchData.subjects = []; // or leave undefined if you prefer
+    }
+
+    const batch = await Batch.create(batchData);
+    return res.status(201).json(batch);
   } catch (err) {
-    res.status(500).json({ message: "Failed to create batch", error: err.message });
+    console.error("createBatch error:", err);
+    return res.status(500).json({ message: "Failed to create batch", error: err.message });
   }
 };
+
 
 // List teacher's batches
 export const listBatches = async (req, res) => {
@@ -380,4 +401,18 @@ export const getAttendanceHistory = async (req, res) => {
     res.status(500).json({ message: "Failed to fetch attendance history", error: err.message });
   }
 };
+
+
+// In batchController.js
+// export const getSyllabusHistory = async (req, res) => {
+//   const { batchId } = req.params;
+//   try {
+//     const batch = await Batch.findById(batchId).populate("syllabusHistory.updatedBy", "name");
+//     if (!batch) return res.status(404).json({ message: "Batch not found" });
+
+//     res.json(batch.syllabusHistory); // array of history objects
+//   } catch (err) {
+//     res.status(500).json({ message: "Server error" });
+//   }
+// };
 

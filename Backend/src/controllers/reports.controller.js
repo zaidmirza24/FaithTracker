@@ -2,6 +2,12 @@
 import { getFilteredAttendance, getAttendanceSummary } from "../services/attendanceService.js";
 import ExcelJS from "exceljs";
 
+
+import Syllabus from "../models/Syllabus.js";
+import Batch from "../models/Batch.js";
+import Teacher from "../models/Teachers.js";
+import mongoose from "mongoose";
+
 export const attendanceSummary = async (req, res) => {
   try {
     const filters = req.query;
@@ -283,3 +289,194 @@ export const exportAttendanceExcel = async (req, res) => {
   }
 };
 
+
+
+
+/**
+ * GET /api/reports/syllabus/summary?batchId=&month=&year=
+ * Returns aggregated syllabus records (per date, per subject) for the month.
+ */
+export const syllabusSummary = async (req, res) => {
+  try {
+    const { batchId, month, year } = req.query;
+    if (!month || !year) {
+      return res.status(400).json({ message: "month and year are required" });
+    }
+    const m = parseInt(month, 10);
+    const y = parseInt(year, 10);
+    const start = new Date(Date.UTC(y, m - 1, 1));
+    const end = new Date(Date.UTC(y, m, 1)); // exclusive
+
+    const filter = { date: { $gte: start, $lt: end } };
+    if (batchId && mongoose.Types.ObjectId.isValid(batchId)) filter.batch = batchId;
+
+    const records = await Syllabus.find(filter).populate("batch").populate("createdBy", "name").lean();
+
+    // Transform into a friendly summary: [{date, batchName, subject, chapter, remark, teacher}]
+    const rows = [];
+    records.forEach((r) => {
+      const dateStr = r.date.toISOString().slice(0, 10);
+      const batchName = r.batch?.name || "";
+      const teacherName = r.createdBy?.name || "";
+      (r.entries || []).forEach((e) => {
+        rows.push({
+          date: dateStr,
+          batch: batchName,
+          subject: e.subject,
+          chapter: e.chapter,
+          remark: e.remark || "",
+          teacher: teacherName,
+        });
+      });
+    });
+
+    return res.json({ summary: rows });
+  } catch (err) {
+    console.error("syllabusSummary error:", err);
+    return res.status(500).json({ message: "Failed to fetch syllabus summary", error: err.message });
+  }
+};
+
+
+/**
+ * GET /api/reports/syllabus/export?batchId=&month=&year=
+ * Streams an Excel (.xlsx) file. Admin-only route.
+ * Adds a bold date header row as a separator for each date.
+ */
+export const exportSyllabusExcel = async (req, res) => {
+  try {
+    const { batchId, month, year } = req.query;
+    if (!month || !year) {
+      return res.status(400).json({ message: "month and year are required" });
+    }
+    const m = parseInt(month, 10);
+    const y = parseInt(year, 10);
+    if (Number.isNaN(m) || Number.isNaN(y)) {
+      return res.status(400).json({ message: "Invalid month or year" });
+    }
+    const start = new Date(Date.UTC(y, m - 1, 1));
+    const end = new Date(Date.UTC(y, m, 1)); // exclusive
+
+    const filter = { date: { $gte: start, $lt: end } };
+    if (batchId && mongoose.Types.ObjectId.isValid(batchId)) filter.batch = batchId;
+
+    const records = await Syllabus.find(filter)
+      .populate("batch", "name")
+      .populate("createdBy", "name")
+      .lean();
+
+    if (!records.length) return res.status(404).json({ message: "No syllabus records found for given range" });
+
+    // Group by date
+    const grouped = {};
+    for (const r of records) {
+      const dateStr = r.date instanceof Date ? r.date.toISOString().slice(0, 10) : new Date(r.date).toISOString().slice(0, 10);
+      if (!grouped[dateStr]) grouped[dateStr] = [];
+      grouped[dateStr].push(r);
+    }
+
+    const sortedDates = Object.keys(grouped).sort();
+
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Syllabus");
+
+    sheet.columns = [
+      { header: "Date", key: "date", width: 15 },
+      { header: "Batch", key: "batch", width: 25 },
+      { header: "Subject", key: "subject", width: 20 },
+      { header: "Chapter", key: "chapter", width: 30 },
+      { header: "Remark", key: "remark", width: 40 },
+      { header: "Teacher", key: "teacher", width: 25 },
+    ];
+
+    for (const dateKey of sortedDates) {
+      // Insert a bold separator row for the date
+      const sepRow = sheet.addRow([dateKey]);
+      sepRow.font = { bold: true, size: 12 };
+      sheet.mergeCells(`A${sepRow.number}:F${sepRow.number}`);
+      sepRow.alignment = { horizontal: "center", vertical: "middle" };
+
+      // Add all records for this date
+      const dateRecords = grouped[dateKey];
+      for (const r of dateRecords) {
+        const batchName = r.batch?.name || "";
+        const teacherName = r.createdBy?.name || "";
+        (r.entries || []).forEach((e) => {
+          sheet.addRow({
+            date: dateKey,
+            batch: batchName,
+            subject: e.subject,
+            chapter: e.chapter,
+            remark: e.remark || "",
+            teacher: teacherName,
+          });
+        });
+      }
+
+      // Add one blank row after each date block
+      sheet.addRow([]);
+    }
+
+    const fileName = `syllabus_${year}_${String(Number(month)).padStart(2, "0")}.xlsx`;
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    res.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error("exportSyllabusExcel error:", err);
+    res.status(500).json({ message: "Failed to export syllabus Excel", error: err.message });
+  }
+};
+
+
+export const exportSyllabus = async (req, res) => {
+  try {
+    const { batchId, year, month } = req.query;
+
+    if (!batchId || !year || !month) {
+      return res.status(400).json({ message: "batchId, year, and month are required" });
+    }
+
+    const startDate = new Date(year, Number(month) - 1, 1);
+    const endDate = new Date(year, Number(month), 0);
+
+    const batch = await Batch.findById(batchId).lean();
+    if (!batch) return res.status(404).json({ message: "Batch not found" });
+
+    const syllabi = await Syllabus.find({
+      batch: batchId,
+      date: { $gte: startDate, $lte: endDate },
+    })
+      .sort({ date: 1 })
+      .lean();
+
+    // Create workbook
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Syllabus");
+
+    // Header row
+    sheet.addRow(["Date", "Subject", "Chapter", "Remark"]);
+
+    // Add syllabus data
+    syllabi.forEach((s) => {
+      const dateStr = new Date(s.date).toLocaleDateString();
+      s.entries.forEach((e) => {
+        sheet.addRow([dateStr, e.subject, e.chapter, e.remark]);
+      });
+    });
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename=syllabus_${year}_${month}.xlsx`);
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error("Export syllabus error:", err);
+    res.status(500).json({ message: "Failed to export syllabus", error: err.message });
+  }
+};
